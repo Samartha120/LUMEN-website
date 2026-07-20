@@ -1,0 +1,139 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./lumen.db"
+}
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  password     String
+  name         String
+  role         String // SUPER_ADMIN | ADMINISTRATOR | COMMISSIONER | DEPARTMENT_MANAGER | SUPERVISOR | ENGINEER | ANALYST | AUDITOR
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+}
+
+model Department {
+  id          String      @id @default(cuid())
+  code        String      @unique
+  name        String
+  description String
+  headName    String
+  budget      Float
+  budgetUsed  Float
+  slaTarget   Int // target resolution hours
+  users       User[]
+  engineers   Engineer[]
+  complaints  Complaint[]
+  assets      Asset[]
+}
+
+model Engineer {
+  id           String      @id @default(cuid())
+  code         String      @unique
+  name         String
+  email        String
+  phone        String
+  zone         String
+  skills       String // comma-separated
+  status       String // AVAILABLE | ON_TASK | OFF_DUTY
+  lat          Float
+  lng          Float
+  rating       Float
+  resolvedJobs Int
+  departmentId String
+  department   Department  @relation(fields: [departmentId], references: [id])
+  complaints   Complaint[]
+}
+
+model Citizen {
+  id         String      @id @default(cuid())
+  code       String      @unique
+  name       String
+  email      String
+  phone      String
+  zone       String
+  verified   Boolean
+  status     String // ACTIVE | SUSPENDED
+  joinedAt   DateTime
+  complaints Complaint[]
+}
+
+model Asset {
+  id              String     @id @default(cuid())
+  code            String     @unique
+  name            String
+  category        String // ROADS | PIPES | STREETLIGHTS | BUILDINGS | SIGNALS | VEHICLES | BRIDGES
+  zone            String
+  condition       String // GOOD | FAIR | POOR | CRITICAL
+  lat             Float
+  lng             Float
+  installedAt     DateTime
+  lastMaintenance DateTime
+  departmentId    String
+  department      Department @relation(fields: [departmentId], references: [id])
+}
+
+model Complaint {
+  id           String          @id @default(cuid())
+  ref          String          @unique // CMP-10245
+  title        String
+  description  String
+  category     String
+  subcategory  String
+  priority     String // LOW | MEDIUM | HIGH | CRITICAL
+  status       String // SUBMITTED | UNDER_REVIEW | ASSIGNED | IN_PROGRESS | PENDING_REVIEW | ESCALATED | CLOSED | REOPENED | REJECTED
+  zone         String
+  address      String
+  lat          Float
+  lng          Float
+  slaHours     Int
+  source       String // CITIZEN_APP | MANUAL
+  rating       Int?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  closedAt     DateTime?
+  departmentId String
+  department   Department      @relation(fields: [departmentId], references: [id])
+  engineerId   String?
+  engineer     Engineer?       @relation(fields: [engineerId], references: [id])
+  citizenId    String?
+  citizen      Citizen?        @relation(fields: [citizenId], references: [id])
+  events       TimelineEvent[]
+}
+
+model TimelineEvent {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id])
+  type        String // STATUS_CHANGE | ASSIGNMENT | COMMENT | ESCALATION | CREATED
+  message     String
+  actor       String
+  createdAt   DateTime  @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String
+  actorRole String
+  action    String
+  module    String
+  target    String
+  details   String
+  ip        String
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  role      String // target role, or ALL
+  title     String
+  body      String
+  kind      String // INFO | WARNING | CRITICAL | SUCCESS
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}

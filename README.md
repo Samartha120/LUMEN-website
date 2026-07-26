@@ -1,56 +1,74 @@
-# LUMEN — Government Operations Platform
+# LUMEN — Intelligent Civic Infrastructure Platform
 
-A working implementation of the **LUMEN Government Web Platform** blueprint: an operational
-command center for municipal civic infrastructure — complaint lifecycle management, GIS
-operations, departments, workforce, citizens, assets, analytics, AI insights and an
-immutable audit trail, all behind role-based access control for 8 staff roles.
+Detect road damage from a citizen's photo, dispatch the right engineer, and verify
+the repair — an AI-assisted civic operations platform in a clean three-tier layout.
 
-## Quick Start
-
-```bash
-npm install
-npx prisma db push        # creates prisma/lumen.db (SQLite)
-npx tsx prisma/seed.ts    # seeds departments, engineers, citizens, complaints, etc.
-npm run dev               # http://localhost:3000
+```
+lumen-platform/
+├── frontend/     Vite + React SPA (React Router, Tailwind)      → :5173
+├── backend/      Express + Prisma REST API (JWT auth)           → :4000
+│   └── ai-service/   FastAPI computer-vision service (YOLO/OpenCV) → :8100
+└── database/     Prisma schema, seed, and SQLite database file
 ```
 
-## Demo Accounts (password: `lumen123`)
+## Run everything
 
-| Email | Role | What they see |
-|---|---|---|
-| superadmin@lumen.gov | Super Admin | Everything incl. monitoring & security |
-| admin@lumen.gov | Administrator | Full admin: settings, audit, security |
-| commissioner@lumen.gov | Commissioner | Executive oversight: dashboards, analytics, GIS |
-| manager@lumen.gov | Department Manager | Water Supply dept scope: complaints, assignment, closure |
-| supervisor@lumen.gov | Supervisor | Dept scope: review/approve closures, escalations |
-| engineer@lumen.gov | Engineer | Own assignments: start work, mark complete |
-| analyst@lumen.gov | Analyst | Analytics, reports, AI insights (read-only ops) |
-| auditor@lumen.gov | Auditor | Audit log explorer, citizens, complaints (read-only) |
+One command (starts all three tiers):
 
-## What's Implemented (vs. the Blueprint)
+```bash
+./start.sh          # opens http://localhost:5173
+```
 
-- **Public zone** — landing, about, features, FAQ, contact (Part 4)
-- **Auth** — credential login, JWT session cookie (jose), audit-logged sign-in/out (Part 5, simplified: no MFA/OTP)
-- **RBAC** — 8 roles, role-filtered sidebar (hidden not disabled), server-side route guards, department scoping for DM/Supervisor/Engineer, permission matrix view in Settings (Part 6)
-- **Dashboard** — role-adaptive KPIs, intake trend, status donut, category bars (Part 7)
-- **Complaints** — CMP refs, full 9-state machine enforced server-side, role-gated transitions, four-eyes closure, escalation with automatic priority bump, assignment drawer, append-only timeline, SLA on-track/at-risk/breached badges, filterable queue, manual intake form (Part 8)
-- **GIS** — SVG operations map: open complaints by priority, live engineer layer (permission-gated + audited), at-risk assets (Part 9; production would use Google Maps JS API)
-- **Departments / Engineers / Citizens / Assets** — directories, detail pages, budgets/KPIs, skills/ratings/workload, condition tracking (Parts 10–13)
-- **Analytics & Reports** — MTTR, SLA compliance, weekly intake vs resolution, per-department reports (Parts 14–15)
-- **Notifications** — role-targeted notification center with unread badge (Part 16)
-- **AI Insights** — heuristic duplicate detection queue, volume forecast, asset failure-risk table (Part 18)
-- **Audit Logs** — immutable explorer; every login, assignment, transition and GIS live-tracking access is recorded (Part 19)
-- **Monitoring / Security Center** — service status, latency, threat flags, sessions (Parts 20–21, demo telemetry)
+…or start each tier in its own terminal:
 
-## Architecture Notes (deviations from the blueprint)
+```bash
+# 1) AI service
+cd backend/ai-service && pip install -r requirements.txt && uvicorn main:app --port 8100
 
-The blueprint specifies Next.js + a separate NestJS API + PostgreSQL + Redis + BullMQ.
-To keep this build runnable on a laptop with zero external services, it is implemented as a
-**single Next.js 16 (App Router) full-stack app**:
+# 2) backend
+cd backend && npm install && npm run db:generate && npm run start
 
-- Server Components + Server Actions in place of the separate NestJS REST API
-- **Prisma + SQLite** (`prisma/lumen.db`) in place of PostgreSQL — the schema mirrors the blueprint's core entities and ports to Postgres by changing the datasource
-- Session JWT in an httpOnly cookie in place of Redis-backed sessions
-- Tailwind CSS v4, Recharts, lucide-react per the blueprint's frontend stack
+# 3) frontend
+cd frontend && npm install && npm run dev
+```
 
-Re-seed anytime with `npx tsx prisma/seed.ts` (wipes and regenerates demo data).
+First-time database setup (creates + seeds `database/lumen.db`):
+
+```bash
+cd backend && npm run db:push && npm run db:seed
+```
+
+Open **http://localhost:5173** and sign in (password `lumen123`):
+
+| Email | Role |
+|---|---|
+| admin@lumen.gov | Administrator |
+| supervisor@lumen.gov | Supervisor |
+| engineer@lumen.gov | Field Engineer |
+
+## The five AI features
+
+1. **Damage detection & classification** — computer vision localises and classifies road
+   damage (pothole, longitudinal/transverse/alligator crack) with bounding boxes.
+2. **Severity scoring** — a 0–100 score from detection geometry sets priority and SLA.
+3. **Duplicate detection** — CNN image embeddings + Haversine distance + time window.
+4. **AI-verified closure** — before/after image comparison blocks unverified repairs.
+5. **Optimised assignment** — Hungarian algorithm (O(n³)) minimises total dispatch cost.
+
+## How the tiers talk
+
+- The **frontend** calls the **backend** REST API at `/api/*` (same-origin via the Vite
+  dev proxy; the auth cookie flows automatically).
+- The **backend** owns the database (Prisma) and orchestrates the **AI service** over HTTP
+  for detection, embeddings and repair verification.
+- The **AI service** reports a `model_mode` — `TRAINED` (fine-tuned RDD2022), `HEURISTIC`
+  (classical OpenCV, the default), or `FALLBACK` (pretrained COCO). The UI badges it so a
+  demo detection is never mistaken for a trained model.
+
+## Architecture note
+
+This is a conventional three-tier separation: a presentation tier (Vite SPA), an
+application tier (Express REST API with role-based access control and the optimisation
+algorithm), and a data tier (Prisma + SQLite), plus a dedicated computer-vision
+microservice. Auth is a JWT in an httpOnly cookie; every state-changing action is written
+to an immutable audit log.

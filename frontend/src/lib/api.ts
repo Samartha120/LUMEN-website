@@ -16,15 +16,33 @@ export class ApiError extends Error {
   }
 }
 
+const getHeaders = (isUpload = false) => {
+  const token = localStorage.getItem("access_token");
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  if (!isUpload) {
+    headers["Content-Type"] = "application/json";
+  }
+  return headers;
+};
+
 export const api = {
-  get: (path: string) => fetch(`/api${path}`, { credentials: "include" }).then(handle),
+  get: (path: string) =>
+    fetch(`/api${path}`, {
+      headers: getHeaders(),
+    }).then(handle),
   post: (path: string, body?: unknown) =>
     fetch(`/api${path}`, {
       method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: getHeaders(),
       body: body ? JSON.stringify(body) : undefined,
     }).then(handle),
   upload: (path: string, form: FormData) =>
-    fetch(`/api${path}`, { method: "POST", credentials: "include", body: form }).then(handle),
+    fetch(`/api${path}`, {
+      method: "POST",
+      headers: getHeaders(true),
+      body: form,
+    }).then(handle),
 };

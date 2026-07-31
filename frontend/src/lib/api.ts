@@ -23,6 +23,7 @@ const getHeaders = (isUpload = false) => {
     headers["Authorization"] = `Bearer ${token}`;
   }
   if (!isUpload) {
+    
     headers["Content-Type"] = "application/json";
   }
   return headers;

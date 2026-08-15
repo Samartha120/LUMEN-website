@@ -13,6 +13,9 @@ model User {
   passwordHash String
   fullName     String
   role         String    // "ADMINISTRATOR", "SUPERVISOR", "ENGINEER", "CITIZEN"
+  employeeCode String?   @unique
+  latitude     Float?
+  longitude    Float?
   departmentId String?
   department   Department? @relation(fields: [departmentId], references: [id])
   createdAt    DateTime  @default(now())

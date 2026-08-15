@@ -243,6 +243,51 @@ app.patch('/api/v1/admin/complaints/:id/status', requireAuth, async (req: any, r
   res.json(updated);
 });
 
+// --- GIS ---
+app.get('/api/gis', requireAuth, async (req: any, res) => {
+  const complaintsData = await prisma.complaint.findMany({
+    where: { 
+      status: { not: 'CLOSED' },
+      latitude: { not: null },
+      longitude: { not: null }
+    }
+  });
+
+  const complaints = complaintsData.map(c => {
+    const sev = c.severity || 0;
+    let band = 'NONE';
+    if (sev >= 60) band = 'SEVERE';
+    else if (sev >= 40) band = 'SIGNIFICANT';
+    else if (sev >= 20) band = 'MODERATE';
+    else if (sev > 0) band = 'MINOR';
+    
+    return {
+      id: c.id,
+      lat: c.latitude,
+      lng: c.longitude,
+      severityScore: c.severity,
+      severityBand: band
+    };
+  });
+
+  const engineersData = await prisma.user.findMany({
+    where: {
+      role: 'ENGINEER',
+      latitude: { not: null },
+      longitude: { not: null }
+    }
+  });
+
+  const engineers = engineersData.map(e => ({
+    id: e.id,
+    code: e.employeeCode || `E-${e.id.substring(0, 4)}`,
+    lat: e.latitude,
+    lng: e.longitude
+  }));
+
+  res.json({ complaints, engineers });
+});
+
 // Admin Dashboard stats
 app.get('/api/v1/admin/dashboard', requireAuth, async (req, res) => {
   const [

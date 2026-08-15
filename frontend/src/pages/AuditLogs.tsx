@@ -2,13 +2,14 @@ import { Lock } from "lucide-react";
 import { useApi } from "../lib/useApi";
 import { ROLE_LABELS } from "../lib/rbac";
 import { fmtDateTime } from "../lib/format";
-import { PageHeader } from "../components/ui";
+import { PageHeader, EmptyState } from "../components/ui";
 
 type L = { id: string; createdAt: string; actor: string; actorRole: string; action: string; module: string; details: string };
 
 export function AuditLogs() {
-  const { data, loading } = useApi<{ logs: L[] }>("/audit-logs");
-  if (loading || !data) return <p className="text-slate-400">Loading…</p>;
+  const { data, loading, error } = useApi<{ logs: L[] }>("/audit-logs");
+  if (loading) return <p className="text-slate-400">Loading…</p>;
+  if (error || !data) return <EmptyState title="Audit log unavailable" hint={error || "This backend does not expose audit log data yet."} />;
   return (
     <>
       <PageHeader title="Audit Log Explorer" subtitle="Immutable, append-only record of every state-changing action" />

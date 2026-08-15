@@ -19,10 +19,11 @@ type Result = {
 type Data = { result: Result; titles: Record<string, { title: string; priority: string }>; engineerCount: number };
 
 export function Assignment() {
-  const { data, loading, reload } = useApi<Data>("/assignment");
+  const { data, loading, error, reload } = useApi<Data>("/assignment");
   const [applying, setApplying] = useState(false);
 
-  if (loading || !data) return <p className="text-slate-400">Loading…</p>;
+  if (loading) return <p className="text-slate-400">Loading…</p>;
+  if (error || !data) return <EmptyState title="Assignment optimiser unavailable" hint={error || "This backend does not expose assignment data yet."} />;
   const { result: r, titles, engineerCount } = data;
 
   async function apply() {

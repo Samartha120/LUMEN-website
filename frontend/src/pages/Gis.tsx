@@ -1,5 +1,5 @@
 import { useApi } from "../lib/useApi";
-import { PageHeader, Card } from "../components/ui";
+import { PageHeader, Card, EmptyState } from "../components/ui";
 
 type C = { id: string; lat: number; lng: number; severityScore: number | null; severityBand: string | null };
 type E = { id: string; code: string; lat: number; lng: number };
@@ -10,8 +10,9 @@ const px = (lng: number) => ((lng - LNG0) / (LNG1 - LNG0)) * 880 + 30;
 const py = (lat: number) => (1 - (lat - LAT0) / (LAT1 - LAT0)) * 480 + 30;
 
 export function Gis() {
-  const { data, loading } = useApi<{ complaints: C[]; engineers: E[] }>("/gis");
-  if (loading || !data) return <p className="text-slate-400">Loading…</p>;
+  const { data, loading, error } = useApi<{ complaints: C[]; engineers: E[] }>("/gis");
+  if (loading) return <p className="text-slate-400">Loading…</p>;
+  if (error || !data) return <EmptyState title="GIS map unavailable" hint={error || "This backend does not expose GIS data yet."} />;
   const { complaints, engineers } = data;
 
   return (

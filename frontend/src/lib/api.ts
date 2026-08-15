@@ -40,6 +40,12 @@ export const api = {
       headers: getHeaders(),
       body: body ? JSON.stringify(body) : undefined,
     }).then(handle),
+  patch: (path: string, body?: unknown) =>
+    fetch(`/api${path}`, {
+      method: "PATCH",
+      headers: getHeaders(),
+      body: body ? JSON.stringify(body) : undefined,
+    }).then(handle),
   upload: (path: string, form: FormData) =>
     fetch(`/api${path}`, {
       method: "POST",

@@ -1,6 +1,6 @@
 import { Wrench } from "lucide-react";
 import { useApi } from "../lib/useApi";
-import { PageHeader } from "../components/ui";
+import { PageHeader, EmptyState } from "../components/ui";
 
 type E = {
   id: string; code: string; name: string; status: string; skills: string; lat: number; lng: number; resolvedJobs: number;
@@ -9,8 +9,9 @@ type E = {
 const STATUS_STYLE: Record<string, string> = { AVAILABLE: "bg-emerald-50 text-emerald-700", ON_TASK: "bg-amber-50 text-amber-700", OFF_DUTY: "bg-slate-100 text-slate-500" };
 
 export function Engineers() {
-  const { data, loading } = useApi<{ engineers: E[] }>("/engineers");
-  if (loading || !data) return <p className="text-slate-400">Loading…</p>;
+  const { data, loading, error } = useApi<{ engineers: E[] }>("/engineers");
+  if (loading) return <p className="text-slate-400">Loading…</p>;
+  if (error || !data) return <EmptyState title="Engineers view unavailable" hint={error || "This backend does not expose engineer data yet."} />;
   return (
     <>
       <PageHeader title="Field Engineers" subtitle="Skills and live positions feed the assignment optimiser" />

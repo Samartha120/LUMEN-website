@@ -517,6 +517,25 @@ app.get('/api/v1/admin/dashboard', requireAuth, async (req, res) => {
   });
 });
 
+app.get('/api/audit-logs', requireAuth, async (req, res) => {
+  const logs = await prisma.auditLog.findMany({
+    orderBy: { createdAt: 'desc' },
+    include: { user: true }
+  });
+  
+  const formattedLogs = logs.map(l => ({
+    id: l.id,
+    createdAt: l.createdAt,
+    actor: l.user.fullName,
+    actorRole: l.user.role,
+    action: l.action,
+    module: l.entityType,
+    details: 'System generated compliant audit record.'
+  }));
+
+  res.json({ logs: formattedLogs });
+});
+
 app.listen(PORT, () => {
   console.log(`Backend Express server running on port ${PORT}`);
 });

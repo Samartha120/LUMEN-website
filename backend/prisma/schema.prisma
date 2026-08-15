@@ -46,6 +46,10 @@ model Complaint {
   zone          String?
   city          String?
   
+  imageUrl          String?
+  videoUrl          String?
+  processedImageUrl String?
+  
   departmentId  String?
   department    Department? @relation(fields: [departmentId], references: [id])
   
@@ -53,6 +57,7 @@ model Complaint {
   updatedAt     DateTime  @updatedAt
   
   dispatchRecords DispatchRecord[]
+  aiPrediction    AiPrediction?
 }
 
 model DispatchRecord {
@@ -70,4 +75,15 @@ model AuditLog {
   userId     String
   user       User     @relation(fields: [userId], references: [id])
   createdAt  DateTime @default(now())
+}
+
+model AiPrediction {
+  id              String    @id @default(uuid())
+  complaintId     String    @unique
+  complaint       Complaint @relation(fields: [complaintId], references: [id])
+  damageClass     String
+  confidenceScore Float
+  boundingBoxes   String    // Stored as JSON string
+  metadata        String?   // Stored as JSON string
+  createdAt       DateTime  @default(now())
 }

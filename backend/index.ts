@@ -4,18 +4,25 @@ import cookieParser from 'cookie-parser';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import multer from 'multer';
+import axios from 'axios';
+import FormData from 'form-data';
+import fs from 'fs';
+import path from 'path';
+
+if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
+const upload = multer({ dest: 'uploads/' });
 
 const app = express();
 const PORT = 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'lumen-super-secret-key-for-jwt';
 
 const prisma = new PrismaClient();
-// Wait, the client might require passing the url, but let's check. 
-// We will just patch this when running if needed.
 
 app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
+app.use('/uploads', express.static('uploads'));
 
 // Auth middleware
 const requireAuth = (req: any, res: any, next: any) => {
@@ -29,6 +36,16 @@ const requireAuth = (req: any, res: any, next: any) => {
     return res.status(401).json({ error: 'Invalid token' });
   }
 };
+
+// --- HEALTH / AI PROXY ---
+app.get('/api/health', async (req, res) => {
+  try {
+    const response = await axios.get('http://localhost:8100/health');
+    res.json({ ai: response.data });
+  } catch (err) {
+    res.json({ ai: null });
+  }
+});
 
 // --- AUTH ROUTES ---
 app.post('/api/auth/login', async (req, res) => {
@@ -64,41 +81,79 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 // --- COMPLAINTS API ---
-app.post('/api/complaints', async (req, res) => {
-  // Mobile app simulation
+app.post('/api/complaints', upload.single('photo'), async (req, res) => {
   const { title, description, category, severity, confidence, latitude, longitude, address, ward, zone, city } = req.body;
+  const file = req.file;
+  
+  if (!file) return res.status(400).json({ error: 'Photo is required' });
+
+  // 1. Call AI service
+  let damageClass = category || 'Unclassified';
+  let aiSeverity = severity ? parseInt(severity) : null;
+  let aiConfidence = confidence ? parseFloat(confidence) : null;
+  let boundingBoxes = '[]';
+  let metadata = null;
+  
+  try {
+    const formData = new FormData();
+    formData.append('file', fs.createReadStream(file.path), file.originalname);
+    const aiRes = await axios.post('http://localhost:8100/detect', formData, {
+      headers: formData.getHeaders()
+    });
+    const aiData = aiRes.data;
+    
+    damageClass = aiData.damageClass;
+    aiSeverity = aiData.severity;
+    aiConfidence = aiData.confidenceScore;
+    boundingBoxes = JSON.stringify(aiData.boundingBoxes);
+    metadata = JSON.stringify(aiData.metadata);
+  } catch (err) {
+    console.error('AI Service Error:', err);
+  }
   
   const count = await prisma.complaint.count();
   const trackingId = `LUM-${10000 + count + 1}`;
   
   // Basic priority logic based on severity
   let priority = 'LOW';
-  if (severity) {
-    if (severity > 80) priority = 'CRITICAL';
-    else if (severity > 50) priority = 'HIGH';
-    else if (severity > 20) priority = 'MEDIUM';
+  if (aiSeverity) {
+    if (aiSeverity > 80) priority = 'CRITICAL';
+    else if (aiSeverity > 50) priority = 'HIGH';
+    else if (aiSeverity > 20) priority = 'MEDIUM';
   }
+
+  // The frontend proxies /uploads to :4000/uploads
+  const imageUrl = `/uploads/${file.filename}`;
 
   const complaint = await prisma.complaint.create({
     data: {
       trackingId,
       title,
       description,
-      category,
-      severity,
-      confidence,
+      category: damageClass,
+      severity: aiSeverity,
+      confidence: aiConfidence,
       priority,
       status: 'NEW',
-      latitude,
-      longitude,
+      latitude: parseFloat(latitude) || null,
+      longitude: parseFloat(longitude) || null,
       address,
       ward,
       zone,
-      city
+      city,
+      imageUrl,
+      aiPrediction: {
+        create: {
+          damageClass,
+          confidenceScore: aiConfidence || 0,
+          boundingBoxes,
+          metadata
+        }
+      }
     }
   });
   
-  res.status(201).json(complaint);
+  res.status(201).json({ ref: complaint.id });
 });
 
 app.get('/api/complaints', requireAuth, async (req: any, res) => {
@@ -113,7 +168,7 @@ app.get('/api/complaints', requireAuth, async (req: any, res) => {
   // Format for frontend
   const formatted = complaints.map(c => ({
     ...c,
-    reporter: null // Citizen mapping later
+    reporter: null
   }));
   
   res.json({ complaints: formatted });
@@ -123,10 +178,22 @@ app.get('/api/complaints/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const complaint = await prisma.complaint.findUnique({
     where: { id },
-    include: { department: true, dispatchRecords: true }
+    include: { 
+      department: true, 
+      dispatchRecords: true,
+      aiPrediction: true 
+    }
   });
   if (!complaint) return res.status(404).json({ error: 'Complaint not found' });
-  res.json({ complaint });
+  
+  if (complaint.aiPrediction) {
+    try {
+      complaint.aiPrediction.boundingBoxes = JSON.parse(complaint.aiPrediction.boundingBoxes);
+      complaint.aiPrediction.metadata = JSON.parse(complaint.aiPrediction.metadata || '{}');
+    } catch (e) {}
+  }
+  
+  res.json(complaint); // frontend expects the raw complaint object from this endpoint
 });
 
 // Admin Dashboard stats

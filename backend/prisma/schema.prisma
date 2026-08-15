@@ -19,6 +19,7 @@ model User {
   updatedAt    DateTime  @updatedAt
   
   auditLogs    AuditLog[]
+  reportedComplaints Complaint[] @relation("ReportedComplaints")
 }
 
 model Department {
@@ -53,11 +54,15 @@ model Complaint {
   departmentId  String?
   department    Department? @relation(fields: [departmentId], references: [id])
   
+  reporterId    String?
+  reporter      User?       @relation("ReportedComplaints", fields: [reporterId], references: [id])
+  
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   
   dispatchRecords DispatchRecord[]
   aiPrediction    AiPrediction?
+  timeline        ComplaintTimeline[]
 }
 
 model DispatchRecord {
@@ -86,4 +91,13 @@ model AiPrediction {
   boundingBoxes   String    // Stored as JSON string
   metadata        String?   // Stored as JSON string
   createdAt       DateTime  @default(now())
+}
+
+model ComplaintTimeline {
+  id          String    @id @default(uuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id])
+  status      String
+  notes       String?
+  createdAt   DateTime  @default(now())
 }

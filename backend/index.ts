@@ -37,6 +37,17 @@ const requireAuth = (req: any, res: any, next: any) => {
   }
 };
 
+const optionalAuth = (req: any, res: any, next: any) => {
+  const token = req.cookies.access_token || req.headers.authorization?.split(' ')[1];
+  if (token) {
+    try {
+      const payload = jwt.verify(token, JWT_SECRET);
+      req.user = payload;
+    } catch (err) {}
+  }
+  next();
+};
+
 // --- HEALTH / AI PROXY ---
 app.get('/api/health', async (req, res) => {
   try {
@@ -81,7 +92,7 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 // --- COMPLAINTS API ---
-app.post('/api/complaints', upload.single('photo'), async (req, res) => {
+app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: any, res) => {
   const { title, description, category, severity, confidence, latitude, longitude, address, ward, zone, city } = req.body;
   const file = req.file;
   
@@ -122,7 +133,6 @@ app.post('/api/complaints', upload.single('photo'), async (req, res) => {
     else if (aiSeverity > 20) priority = 'MEDIUM';
   }
 
-  // The frontend proxies /uploads to :4000/uploads
   const imageUrl = `/uploads/${file.filename}`;
 
   const complaint = await prisma.complaint.create({
@@ -142,12 +152,19 @@ app.post('/api/complaints', upload.single('photo'), async (req, res) => {
       zone,
       city,
       imageUrl,
+      reporterId: req.user?.sub || null, // from optionalAuth
       aiPrediction: {
         create: {
           damageClass,
           confidenceScore: aiConfidence || 0,
           boundingBoxes,
           metadata
+        }
+      },
+      timeline: {
+        create: {
+          status: 'NEW',
+          notes: 'Complaint submitted'
         }
       }
     }
@@ -160,18 +177,14 @@ app.get('/api/complaints', requireAuth, async (req: any, res) => {
   const complaints = await prisma.complaint.findMany({
     include: {
       department: true,
-      dispatchRecords: true
+      dispatchRecords: true,
+      reporter: { select: { fullName: true, email: true } },
+      timeline: { orderBy: { createdAt: 'asc' } }
     },
     orderBy: { createdAt: 'desc' }
   });
   
-  // Format for frontend
-  const formatted = complaints.map(c => ({
-    ...c,
-    reporter: null
-  }));
-  
-  res.json({ complaints: formatted });
+  res.json({ complaints });
 });
 
 app.get('/api/complaints/:id', requireAuth, async (req, res) => {
@@ -181,7 +194,9 @@ app.get('/api/complaints/:id', requireAuth, async (req, res) => {
     include: { 
       department: true, 
       dispatchRecords: true,
-      aiPrediction: true 
+      aiPrediction: true,
+      reporter: { select: { fullName: true, email: true } },
+      timeline: { orderBy: { createdAt: 'asc' } }
     }
   });
   if (!complaint) return res.status(404).json({ error: 'Complaint not found' });
@@ -193,7 +208,39 @@ app.get('/api/complaints/:id', requireAuth, async (req, res) => {
     } catch (e) {}
   }
   
-  res.json(complaint); // frontend expects the raw complaint object from this endpoint
+  res.json(complaint);
+});
+
+app.patch('/api/v1/admin/complaints/:id/status', requireAuth, async (req: any, res) => {
+  const { id } = req.params;
+  const { status, notes } = req.body;
+  
+  const complaint = await prisma.complaint.findUnique({ where: { id } });
+  if (!complaint) return res.status(404).json({ error: 'Complaint not found' });
+  
+  const updated = await prisma.complaint.update({
+    where: { id },
+    data: {
+      status,
+      timeline: {
+        create: {
+          status,
+          notes: notes || `Status updated to ${status}`
+        }
+      }
+    }
+  });
+
+  // Audit log
+  await prisma.auditLog.create({
+    data: {
+      action: `Changed status to ${status}`,
+      entityType: `Complaint (${updated.trackingId})`,
+      userId: req.user.sub
+    }
+  });
+
+  res.json(updated);
 });
 
 // Admin Dashboard stats

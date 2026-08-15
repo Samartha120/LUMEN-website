@@ -10,6 +10,9 @@ import FormData from 'form-data';
 import fs from 'fs';
 import path from 'path';
 
+// @ts-ignore
+import computeMunkres from 'munkres-js';
+
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 const upload = multer({ dest: 'uploads/' });
 
@@ -41,8 +44,7 @@ const optionalAuth = (req: any, res: any, next: any) => {
   const token = req.cookies.access_token || req.headers.authorization?.split(' ')[1];
   if (token) {
     try {
-      const payload = jwt.verify(token, JWT_SECRET);
-      req.user = payload;
+      req.user = jwt.verify(token, JWT_SECRET);
     } catch (err) {}
   }
   next();
@@ -98,7 +100,6 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
   
   if (!file) return res.status(400).json({ error: 'Photo is required' });
 
-  // 1. Call AI service
   let damageClass = category || 'Unclassified';
   let aiSeverity = severity ? parseInt(severity) : null;
   let aiConfidence = confidence ? parseFloat(confidence) : null;
@@ -111,13 +112,12 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
     const aiRes = await axios.post('http://localhost:8100/detect', formData, {
       headers: formData.getHeaders()
     });
-    const aiData = aiRes.data;
     
-    damageClass = aiData.damageClass;
-    aiSeverity = aiData.severity;
-    aiConfidence = aiData.confidenceScore;
-    boundingBoxes = JSON.stringify(aiData.boundingBoxes);
-    metadata = JSON.stringify(aiData.metadata);
+    damageClass = aiRes.data.damageClass;
+    aiSeverity = aiRes.data.severity;
+    aiConfidence = aiRes.data.confidenceScore;
+    boundingBoxes = JSON.stringify(aiRes.data.boundingBoxes);
+    metadata = JSON.stringify(aiRes.data.metadata);
   } catch (err) {
     console.error('AI Service Error:', err);
   }
@@ -125,7 +125,6 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
   const count = await prisma.complaint.count();
   const trackingId = `LUM-${10000 + count + 1}`;
   
-  // Basic priority logic based on severity
   let priority = 'LOW';
   if (aiSeverity) {
     if (aiSeverity > 80) priority = 'CRITICAL';
@@ -140,8 +139,6 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
   else if (lowerClass.includes('water') || lowerClass.includes('pipe') || lowerClass.includes('leak') || lowerClass.includes('flood')) assignedDeptName = 'Water Supply';
   
   const dept = await prisma.department.findUnique({ where: { name: assignedDeptName } });
-
-  const imageUrl = `/uploads/${file.filename}`;
 
   const complaint = await prisma.complaint.create({
     data: {
@@ -159,9 +156,9 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
       ward,
       zone,
       city,
-      imageUrl,
+      imageUrl: `/uploads/${file.filename}`,
       departmentId: dept?.id,
-      reporterId: req.user?.sub || null, // from optionalAuth
+      reporterId: req.user?.sub || null,
       aiPrediction: {
         create: {
           damageClass,
@@ -173,7 +170,7 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
       timeline: {
         create: {
           status: 'NEW',
-          notes: 'Complaint submitted'
+          notes: 'Complaint submitted and routed to ' + assignedDeptName
         }
       }
     }
@@ -192,7 +189,6 @@ app.get('/api/complaints', requireAuth, async (req: any, res) => {
     },
     orderBy: { createdAt: 'desc' }
   });
-  
   res.json({ complaints });
 });
 
@@ -216,7 +212,6 @@ app.get('/api/complaints/:id', requireAuth, async (req, res) => {
       complaint.aiPrediction.metadata = JSON.parse(complaint.aiPrediction.metadata || '{}');
     } catch (e) {}
   }
-  
   res.json(complaint);
 });
 
@@ -240,7 +235,6 @@ app.patch('/api/v1/admin/complaints/:id/status', requireAuth, async (req: any, r
     }
   });
 
-  // Audit log
   await prisma.auditLog.create({
     data: {
       action: `Changed status to ${status}`,
@@ -255,11 +249,7 @@ app.patch('/api/v1/admin/complaints/:id/status', requireAuth, async (req: any, r
 // --- GIS ---
 app.get('/api/gis', requireAuth, async (req: any, res) => {
   const complaintsData = await prisma.complaint.findMany({
-    where: { 
-      status: { not: 'CLOSED' },
-      latitude: { not: null },
-      longitude: { not: null }
-    }
+    where: { status: { not: 'CLOSED' }, latitude: { not: null }, longitude: { not: null } }
   });
 
   const complaints = complaintsData.map(c => {
@@ -269,22 +259,11 @@ app.get('/api/gis', requireAuth, async (req: any, res) => {
     else if (sev >= 40) band = 'SIGNIFICANT';
     else if (sev >= 20) band = 'MODERATE';
     else if (sev > 0) band = 'MINOR';
-    
-    return {
-      id: c.id,
-      lat: c.latitude,
-      lng: c.longitude,
-      severityScore: c.severity,
-      severityBand: band
-    };
+    return { id: c.id, lat: c.latitude, lng: c.longitude, severityScore: c.severity, severityBand: band };
   });
 
   const engineersData = await prisma.user.findMany({
-    where: {
-      role: 'ENGINEER',
-      latitude: { not: null },
-      longitude: { not: null }
-    }
+    where: { role: 'ENGINEER', latitude: { not: null }, longitude: { not: null } }
   });
 
   const engineers = engineersData.map(e => ({
@@ -301,10 +280,12 @@ app.get('/api/gis', requireAuth, async (req: any, res) => {
 app.get('/api/engineers', requireAuth, async (req, res) => {
   const engineersData = await prisma.user.findMany({
     where: { role: 'ENGINEER' },
-    include: { department: true }
+    include: { 
+      department: true,
+      assignedComplaints: { where: { status: { notIn: ['RESOLVED', 'CLOSED', 'REJECTED'] } } }
+    }
   });
 
-  // Since we haven't implemented assignment logic (Phase 6), we return empty complaints array
   const engineers = engineersData.map(e => ({
     id: e.id,
     code: e.employeeCode || `E-${e.id.substring(0, 4)}`,
@@ -315,10 +296,196 @@ app.get('/api/engineers', requireAuth, async (req, res) => {
     lng: e.longitude || 77.5,
     resolvedJobs: e.resolvedJobs,
     department: e.department ? { name: e.department.name } : { name: 'Unassigned' },
-    complaints: []
+    complaints: e.assignedComplaints.map(c => ({ id: c.id }))
   }));
 
   res.json({ engineers });
+});
+
+// --- ASSIGNMENT ENGINE (HUNGARIAN ALG) ---
+function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; // km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+function computeAssignmentPlan(complaints: any[], engineers: any[]) {
+  if (complaints.length === 0 || engineers.length === 0) {
+    return { assignments: [], unassigned: complaints, totalCost: 0, naiveTotalCost: 0, costImprovementPct: 0, totalDistanceKm: 0, naiveTotalDistanceKm: 0 };
+  }
+
+  const costMatrix: number[][] = [];
+  const naiveAssignments: any[] = [];
+  const assignments: any[] = [];
+  
+  let naiveCost = 0;
+  let naiveDist = 0;
+  let optCost = 0;
+  let optDist = 0;
+
+  for (let i = 0; i < complaints.length; i++) {
+    const c = complaints[i];
+    const row = [];
+    let bestEngIdx = -1;
+    let minNaiveCost = Infinity;
+
+    for (let j = 0; j < engineers.length; j++) {
+      const e = engineers[j];
+      let cost = 1000000;
+      
+      if (e.departmentId === c.departmentId && e.status !== 'OFF_DUTY') {
+        const dist = getDistance(c.latitude || 0, c.longitude || 0, e.latitude || 0, e.longitude || 0);
+        
+        let isMatch = false;
+        if (e.skills && c.category) {
+          const cat = c.category.toLowerCase();
+          const sk = e.skills.toLowerCase();
+          if ((cat.includes('road') || cat.includes('pothole')) && (sk.includes('road') || sk.includes('pothole'))) isMatch = true;
+          else if (cat.includes('light') && sk.includes('light')) isMatch = true;
+          else if ((cat.includes('water') || cat.includes('pipe')) && (sk.includes('pipe') || sk.includes('water'))) isMatch = true;
+        }
+        
+        let skillPenalty = isMatch ? 0 : 8;
+        const severityRebate = 12 * ((c.severity || 0) / 100);
+        const workloadPenalty = 3 * (e.assignedComplaints?.length || 0); // Active jobs penalty
+
+        cost = dist + skillPenalty + workloadPenalty - severityRebate;
+        cost = Math.max(0, cost);
+        
+        // Naive assignment (Greedy nearest/cheapest)
+        // Ensure naive assignment does not reuse engineers if possible, but for naive cost we just sum best matches
+        if (cost < minNaiveCost) {
+          minNaiveCost = cost;
+          bestEngIdx = j;
+        }
+      }
+      row.push(cost);
+    }
+    costMatrix.push(row);
+    
+    if (bestEngIdx !== -1) {
+      const e = engineers[bestEngIdx];
+      const dist = getDistance(c.latitude || 0, c.longitude || 0, e.latitude || 0, e.longitude || 0);
+      naiveCost += minNaiveCost;
+      naiveDist += dist;
+    }
+  }
+
+  // computeMunkres solves minimum weight matching
+  const indices = computeMunkres(costMatrix);
+  
+  for (let i = 0; i < indices.length; i++) {
+    const cIdx = indices[i][0];
+    const eIdx = indices[i][1];
+    const cost = costMatrix[cIdx][eIdx];
+    
+    if (cost < 1000000) {
+      const c = complaints[cIdx];
+      const e = engineers[eIdx];
+      const dist = getDistance(c.latitude || 0, c.longitude || 0, e.latitude || 0, e.longitude || 0);
+      
+      let isMatch = false;
+      if (e.skills && c.category) {
+        const cat = c.category.toLowerCase();
+        const sk = e.skills.toLowerCase();
+        if ((cat.includes('road') || cat.includes('pothole')) && (sk.includes('road') || sk.includes('pothole'))) isMatch = true;
+        else if (cat.includes('light') && sk.includes('light')) isMatch = true;
+        else if ((cat.includes('water') || cat.includes('pipe')) && (sk.includes('pipe') || sk.includes('water'))) isMatch = true;
+      }
+      
+      optCost += cost;
+      optDist += dist;
+      assignments.push({
+        complaint: { id: c.id, ref: c.trackingId, category: c.category, severityScore: c.severity || 0 },
+        engineer: { code: e.employeeCode || e.fullName, name: e.fullName, openJobs: e.assignedComplaints?.length || 0, id: e.id },
+        distanceKm: Number(dist.toFixed(2)),
+        cost: Number(cost.toFixed(2)),
+        skillMatch: isMatch
+      });
+    }
+  }
+
+  const unassigned = complaints.filter(c => !assignments.find(a => a.complaint.id === c.id));
+  
+  let costImprovementPct = 0;
+  if (naiveCost > 0) {
+    costImprovementPct = ((naiveCost - optCost) / naiveCost) * 100;
+  }
+
+  return {
+    assignments,
+    unassigned,
+    totalCost: optCost,
+    naiveTotalCost: naiveCost,
+    costImprovementPct: Number(costImprovementPct.toFixed(1)),
+    totalDistanceKm: Number(optDist.toFixed(1)),
+    naiveTotalDistanceKm: Number(naiveDist.toFixed(1))
+  };
+}
+
+app.get('/api/assignment', requireAuth, async (req: any, res) => {
+  const complaints = await prisma.complaint.findMany({
+    where: { status: 'NEW' }, // Unassigned complaints
+    include: { department: true }
+  });
+  
+  const engineers = await prisma.user.findMany({
+    where: { role: 'ENGINEER' },
+    include: { assignedComplaints: { where: { status: { notIn: ['RESOLVED', 'CLOSED', 'REJECTED'] } } } }
+  });
+
+  const result = computeAssignmentPlan(complaints, engineers);
+  
+  const titles: Record<string, { title: string, priority: string }> = {};
+  complaints.forEach(c => { titles[c.id] = { title: c.title, priority: c.priority }; });
+  
+  res.json({ result, titles, engineerCount: engineers.length });
+});
+
+app.post('/api/assignment/apply', requireAuth, async (req: any, res) => {
+  const complaints = await prisma.complaint.findMany({ where: { status: 'NEW' } });
+  const engineers = await prisma.user.findMany({
+    where: { role: 'ENGINEER' },
+    include: { assignedComplaints: { where: { status: { notIn: ['RESOLVED', 'CLOSED', 'REJECTED'] } } } }
+  });
+  
+  const plan = computeAssignmentPlan(complaints, engineers);
+  
+  for (const a of plan.assignments) {
+    const c = await prisma.complaint.update({
+      where: { id: a.complaint.id },
+      data: {
+        status: 'ASSIGNED',
+        assignedToId: a.engineer.id,
+        timeline: {
+          create: {
+            status: 'ASSIGNED',
+            notes: `Auto-Assigned to Engineer ${a.engineer.code}`
+          }
+        },
+        dispatchRecords: {
+          create: {
+            department: 'System Auto-Router'
+          }
+        }
+      }
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        action: `System Optimiser Assigned to ${a.engineer.name}`,
+        entityType: `Complaint (${c.trackingId})`,
+        userId: req.user.sub
+      }
+    });
+  }
+  
+  res.json({ success: true, applied: plan.assignments.length });
 });
 
 // Admin Dashboard stats

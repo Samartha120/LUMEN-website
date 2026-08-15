@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  fullName     String
+  role         String    // "ADMINISTRATOR", "SUPERVISOR", "ENGINEER", "CITIZEN"
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  
+  auditLogs    AuditLog[]
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  users     User[]
+  complaints Complaint[]
+}
+
+model Complaint {
+  id            String    @id @default(uuid())
+  trackingId    String    @unique // e.g., LUM-10482
+  title         String
+  description   String?
+  category      String
+  severity      Int?      // 0-100
+  confidence    Float?    
+  priority      String    // "LOW", "MEDIUM", "HIGH", "CRITICAL"
+  status        String    // "NEW", "PENDING", "ASSIGNED", "IN_PROGRESS", "PENDING_REVIEW", "RESOLVED"
+  
+  latitude      Float?
+  longitude     Float?
+  address       String?
+  ward          String?
+  zone          String?
+  city          String?
+  
+  departmentId  String?
+  department    Department? @relation(fields: [departmentId], references: [id])
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  dispatchRecords DispatchRecord[]
+}
+
+model DispatchRecord {
+  id           String    @id @default(uuid())
+  complaintId  String
+  complaint    Complaint @relation(fields: [complaintId], references: [id])
+  department   String    // Snapshot of the department assigned
+  assignedAt   DateTime  @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  createdAt  DateTime @default(now())
+}

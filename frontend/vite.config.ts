@@ -9,9 +9,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api/v1/admin": { target: "http://localhost:3000", changeOrigin: true },
-      "/api": { target: "http://localhost:3000", changeOrigin: true },
-      "/uploads": { target: "http://localhost:3000", changeOrigin: true },
+      "/api/v1/admin": { target: "http://localhost:4000", changeOrigin: true },
+      "/api": { target: "http://localhost:4000", changeOrigin: true },
+      "/uploads": { target: "http://localhost:4000", changeOrigin: true },
     },
   },
 });

@@ -12,10 +12,13 @@ model User {
   email        String    @unique
   passwordHash String
   fullName     String
-  role         String    // "ADMINISTRATOR", "SUPERVISOR", "ENGINEER", "CITIZEN"
+  role         String
   employeeCode String?   @unique
   latitude     Float?
   longitude    Float?
+  status       String    @default("AVAILABLE")
+  skills       String?
+  resolvedJobs Int       @default(0)
   departmentId String?
   department   Department? @relation(fields: [departmentId], references: [id])
   createdAt    DateTime  @default(now())

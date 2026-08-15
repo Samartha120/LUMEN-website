@@ -133,6 +133,14 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
     else if (aiSeverity > 20) priority = 'MEDIUM';
   }
 
+  // Automatic Routing to Department
+  let assignedDeptName = 'Public Works';
+  const lowerClass = damageClass.toLowerCase();
+  if (lowerClass.includes('light') || lowerClass.includes('electric')) assignedDeptName = 'Electrical';
+  else if (lowerClass.includes('water') || lowerClass.includes('pipe') || lowerClass.includes('leak') || lowerClass.includes('flood')) assignedDeptName = 'Water Supply';
+  
+  const dept = await prisma.department.findUnique({ where: { name: assignedDeptName } });
+
   const imageUrl = `/uploads/${file.filename}`;
 
   const complaint = await prisma.complaint.create({
@@ -152,6 +160,7 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
       zone,
       city,
       imageUrl,
+      departmentId: dept?.id,
       reporterId: req.user?.sub || null, // from optionalAuth
       aiPrediction: {
         create: {
@@ -286,6 +295,30 @@ app.get('/api/gis', requireAuth, async (req: any, res) => {
   }));
 
   res.json({ complaints, engineers });
+});
+
+// --- ENGINEERS ---
+app.get('/api/engineers', requireAuth, async (req, res) => {
+  const engineersData = await prisma.user.findMany({
+    where: { role: 'ENGINEER' },
+    include: { department: true }
+  });
+
+  // Since we haven't implemented assignment logic (Phase 6), we return empty complaints array
+  const engineers = engineersData.map(e => ({
+    id: e.id,
+    code: e.employeeCode || `E-${e.id.substring(0, 4)}`,
+    name: e.fullName,
+    status: e.status,
+    skills: e.skills || '',
+    lat: e.latitude || 12.9,
+    lng: e.longitude || 77.5,
+    resolvedJobs: e.resolvedJobs,
+    department: e.department ? { name: e.department.name } : { name: 'Unassigned' },
+    complaints: []
+  }));
+
+  res.json({ engineers });
 });
 
 // Admin Dashboard stats

@@ -95,7 +95,7 @@ app.post('/api/auth/logout', (req, res) => {
 
 // --- COMPLAINTS API ---
 app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: any, res) => {
-  const { title, description, category, severity, confidence, latitude, longitude, address, ward, zone, city } = req.body;
+  const { title, description, category, severity, confidence, lat, lng, address, ward, zone, city } = req.body;
   const file = req.file;
   
   if (!file) return res.status(400).json({ error: 'Photo is required' });
@@ -150,8 +150,8 @@ app.post('/api/complaints', optionalAuth, upload.single('photo'), async (req: an
       confidence: aiConfidence,
       priority,
       status: 'NEW',
-      latitude: parseFloat(latitude) || null,
-      longitude: parseFloat(longitude) || null,
+      latitude: parseFloat(lat) || null,
+      longitude: parseFloat(lng) || null,
       address,
       ward,
       zone,

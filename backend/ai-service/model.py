@@ -1,9 +1,14 @@
 """Model loading and inference for the LUMEN civic damage CV service.
 
-Two operating modes:
-  TRAINED  - ai-service/weights/rdd_best.pt exists (fine-tuned on RDD2022)
-  FALLBACK - no fine-tuned weights; a pretrained COCO YOLO is loaded so the
-             pipeline is exercisable end-to-end before the dataset is trained.
+Detects civic infrastructure damage across five categories (roads, electrical,
+waste, water, public property) — see taxonomy.py for the class list. The
+detected class determines the severity weighting and which department the
+complaint is routed to.
+
+Operating modes:
+  TRAINED   - weights/civic_best.pt exists (multi-category model, see train_multi.py)
+  HEURISTIC - no trained weights; classical OpenCV detection (roads only)
+  FALLBACK  - pretrained COCO YOLO, for pipeline smoke-testing only
 
 Every response carries `model_mode` so the UI can state plainly which is in use.
 """
@@ -19,30 +24,57 @@ import cv2
 import numpy as np
 from PIL import Image
 
+import taxonomy as TAX
+
 WEIGHTS_DIR = Path(__file__).parent / "weights"
-TRAINED_WEIGHTS = WEIGHTS_DIR / "rdd_best.pt"
-FALLBACK_WEIGHTS = "yolov8n.pt"
+# Prefer the multi-category model; fall back to a roads-only RDD model if that
+# is what has been trained so far.
+TRAINED_WEIGHTS = WEIGHTS_DIR / "civic_best.pt"
+LEGACY_WEIGHTS = WEIGHTS_DIR / "rdd_best.pt"
+FALLBACK_WEIGHTS = "yolo11n.pt"
 
-# RDD2022 damage classes.
-RDD_CLASSES = {
-    "D00": "Longitudinal Crack",
-    "D10": "Transverse Crack",
-    "D20": "Alligator Crack",
-    "D40": "Pothole",
-}
-
-# Severity weight per class - potholes and alligator cracking are the most
-# structurally serious, so they contribute more to the severity score.
-CLASS_SEVERITY_WEIGHT = {
-    "Pothole": 1.0,
-    "Alligator Crack": 0.85,
-    "Transverse Crack": 0.55,
-    "Longitudinal Crack": 0.45,
-}
-DEFAULT_WEIGHT = 0.5
+# Raw model label -> taxonomy label (RDD2022 codes etc.)
+RDD_CLASSES = TAX.RDD_ALIASES
+CLASS_SEVERITY_WEIGHT = {name: e["weight"] for name, e in TAX.CLASSES.items()}
+DEFAULT_WEIGHT = TAX.DEFAULT_WEIGHT
 
 _model = None
 _mode = None
+_occluder_model = None
+_occluder_failed = False
+
+# COCO ids for things that sit ON the carriageway but are not damage.
+# A parked car is dark, textured and edge-dense, so the classical detector reads
+# it as alligator cracking unless it is removed from the road surface first.
+_OCCLUDER_COCO_IDS = {
+    0: "person", 1: "bicycle", 2: "car", 3: "motorcycle",
+    5: "bus", 6: "train", 7: "truck",
+}
+
+# Below this share of the frame segmenting as road surface, the photograph is
+# treated as not being of a road or civic area at all.
+MIN_ROAD_FRACTION = 0.08
+
+# A photograph of a real surface always carries texture. Measured across 98
+# genuine civic photographs the lowest edge density was 0.026; a cartoon face
+# scores 0.005 and a drawn robot 0.007. Flat synthetic images otherwise slip
+# past the colour rule, because a grey figure on a pale background looks
+# exactly like asphalt to a saturation test.
+MIN_EDGE_DENSITY = 0.015
+
+# COCO classes whose presence, at size, means the photograph is of a subject
+# rather than of a place. Vehicles are excluded here on purpose — a car in
+# frame is normal on a street, and _occluder_boxes already masks it out of the
+# road surface.
+_NON_CIVIC_COCO_IDS = {
+    0: "person", 15: "cat", 16: "dog", 17: "horse", 18: "sheep", 19: "cow",
+    62: "tv", 63: "laptop", 67: "cell phone", 56: "chair", 57: "couch",
+    59: "bed", 60: "dining table", 39: "bottle", 41: "cup", 73: "book",
+}
+
+# Detections recovered from the tiled fallback must clear this to be reported.
+# Higher than the normal threshold on purpose: see the note where it is used.
+TILED_MIN_CONF = 0.35
 
 # Detector selection when no fine-tuned weights are present:
 #   heuristic (default) - classical-CV road-damage localisation (see below)
@@ -50,12 +82,21 @@ _mode = None
 _FALLBACK_DETECTOR = os.environ.get("LUMEN_DETECTOR", "heuristic").lower()
 
 
+def _trained_weights_path() -> Path | None:
+    """Multi-category weights if present, else legacy roads-only weights."""
+    if TRAINED_WEIGHTS.exists():
+        return TRAINED_WEIGHTS
+    if LEGACY_WEIGHTS.exists():
+        return LEGACY_WEIGHTS
+    return None
+
+
 def get_mode() -> str:
     """Resolve the active detection mode without forcing a YOLO load."""
     global _mode
     if _mode is not None:
         return _mode
-    if TRAINED_WEIGHTS.exists():
+    if _trained_weights_path() is not None:
         _mode = "TRAINED"
     elif _FALLBACK_DETECTOR == "coco":
         _mode = "FALLBACK"
@@ -75,8 +116,59 @@ def get_model():
 
     from ultralytics import YOLO
 
-    _model = YOLO(str(TRAINED_WEIGHTS)) if mode == "TRAINED" else YOLO(FALLBACK_WEIGHTS)
+    weights = _trained_weights_path()
+    _model = YOLO(str(weights)) if mode == "TRAINED" and weights else YOLO(FALLBACK_WEIGHTS)
     return _model, _mode
+
+
+def _get_occluder_model():
+    """Pretrained COCO detector, used only to find vehicles and pedestrians.
+
+    This is not the damage detector and never contributes a detection. It is a
+    filter: whatever it finds is cut out of the road surface so the damage
+    heuristic cannot analyse it. If ultralytics or the weights are unavailable
+    the pipeline still runs, just without vehicle exclusion.
+    """
+    global _occluder_model, _occluder_failed
+    if _occluder_model is not None or _occluder_failed:
+        return _occluder_model
+    try:
+        from ultralytics import YOLO
+
+        _occluder_model = YOLO(FALLBACK_WEIGHTS)
+    except Exception:
+        _occluder_failed = True
+        _occluder_model = None
+    return _occluder_model
+
+
+def _occluder_boxes(img: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Boxes of vehicles/pedestrians in the frame, slightly dilated.
+
+    The margin matters: a car's shadow and the dark gap under the body sit just
+    outside the detected box and are exactly the kind of dark blob the pothole
+    rule keys on.
+    """
+    m = _get_occluder_model()
+    if m is None:
+        return []
+    try:
+        res = m.predict(img, verbose=False, conf=0.30)[0]
+    except Exception:
+        return []
+    h, w = img.shape[:2]
+    out: list[tuple[int, int, int, int]] = []
+    for box in getattr(res, "boxes", []) or []:
+        cid = int(box.cls[0])
+        if cid not in _OCCLUDER_COCO_IDS:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+        mx, my = 0.04 * (x2 - x1), 0.06 * (y2 - y1)
+        out.append((
+            max(0, int(x1 - mx)), max(0, int(y1 - my)),
+            min(w, int(x2 + mx)), min(h, int(y2 + my)),
+        ))
+    return out
 
 
 @dataclass
@@ -92,6 +184,157 @@ def _read_image(data: bytes) -> np.ndarray:
     return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
 
+def _predict(model, img: np.ndarray, conf: float, frame_area: float,
+             ox: int = 0, oy: int = 0) -> list["Detection"]:
+    """One YOLO pass. `ox`/`oy` shift boxes back into full-frame coordinates."""
+    out: list[Detection] = []
+    results = model.predict(img, conf=conf, verbose=False)[0]
+    names = results.names
+    for b in results.boxes:
+        raw = names.get(int(b.cls.item()), str(int(b.cls.item())))
+        label = TAX.normalise(raw)
+        # A trained checkpoint keeps every output head it was built with, so it
+        # can still predict a class that has since been retired from the
+        # taxonomy. Reporting one would route a complaint to a department that
+        # no longer exists, so unknown labels are dropped here rather than
+        # forcing a retrain every time a class is removed.
+        if label not in TAX.CLASSES:
+            continue
+        x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
+        x1, y1, x2, y2 = x1 + ox, y1 + oy, x2 + ox, y2 + oy
+        area = max(0.0, (x2 - x1)) * max(0.0, (y2 - y1))
+        out.append(Detection(
+            label=label,
+            confidence=round(float(b.conf.item()), 4),
+            box=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+            area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
+        ))
+    return out
+
+
+def _iou(a: list[float], b: list[float]) -> float:
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def _contained(inner: list[float], outer: list[float]) -> float:
+    """How much of `inner` lies inside `outer`, 0-1."""
+    ix1, iy1 = max(inner[0], outer[0]), max(inner[1], outer[1])
+    ix2, iy2 = min(inner[2], outer[2]), min(inner[3], outer[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    area = (inner[2] - inner[0]) * (inner[3] - inner[1])
+    return (iw * ih) / area if area > 0 else 0.0
+
+
+def _nms(dets: list["Detection"], thresh: float = 0.45) -> list["Detection"]:
+    """Suppress overlapping boxes of the same class, keeping the confident one.
+
+    Tiles overlap deliberately, so a defect straddling a seam is found twice.
+    Plain IoU is not enough once tiled results are merged with the whole-frame
+    pass: a tile sees part of a large defect and returns a small box sitting
+    entirely inside the big one. Their IoU is low, so both survive and the
+    result reads as two potholes where there is one. Containment catches that.
+    """
+    kept: list[Detection] = []
+    for d in sorted(dets, key=lambda x: -x.confidence):
+        duplicate = any(
+            k.label == d.label and (_iou(k.box, d.box) > thresh or _contained(d.box, k.box) > 0.7)
+            for k in kept
+        )
+        if not duplicate:
+            kept.append(d)
+    return kept
+
+
+def _predict_tiled(model, img: np.ndarray, conf: float, frame_area: float,
+                   grid: tuple[int, int] = (3, 2), overlap: float = 0.2) -> list["Detection"]:
+    """Detect over an overlapping grid of tiles, then merge.
+
+    Each tile is a crop, so the defects inside it are large relative to the
+    tile and survive the resize to the network input. Tiles overlap by 20% so a
+    defect on a seam is not cut in half, and the duplicates that creates are
+    removed by NMS afterwards.
+    """
+    h, w = img.shape[:2]
+    cols, rows = grid
+    tw, th = int(w / cols * (1 + overlap)), int(h / rows * (1 + overlap))
+    dets: list[Detection] = []
+    for r in range(rows):
+        for c in range(cols):
+            x0 = min(max(0, int(c * w / cols)), max(0, w - tw))
+            y0 = min(max(0, int(r * h / rows)), max(0, h - th))
+            tile = img[y0:y0 + th, x0:x0 + tw]
+            if tile.size == 0:
+                continue
+            dets.extend(_predict(model, tile, conf, frame_area, ox=x0, oy=y0))
+    return _nms(dets)
+
+
+def assess_scene(img: np.ndarray) -> dict:
+    """Is this photograph plausibly of a road or civic area at all?
+
+    A citizen (or a bored tester) can upload a selfie, a screenshot or a cat.
+    Analysing that and returning "no damage found" is misleading — the honest
+    answer is that the photograph is not of the right thing. The road mask
+    already answers this: if almost none of the frame segments as road surface,
+    there is nothing civic to assess.
+    """
+    h, w = img.shape[:2]
+    road = _road_mask(img)
+    road_fraction = float((road > 0).sum()) / float(h * w)
+
+    # Objects that, when they dominate the frame, mean the photo is of a thing
+    # rather than of a place — a pet, a person, a laptop on a desk.
+    subjects: list[str] = []
+    m = _get_occluder_model()
+    if m is not None:
+        try:
+            res = m.predict(img, verbose=False, conf=0.35)[0]
+            for box in getattr(res, "boxes", []) or []:
+                name = _NON_CIVIC_COCO_IDS.get(int(box.cls[0]))
+                if not name:
+                    continue
+                x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+                if (x2 - x1) * (y2 - y1) > 0.25 * h * w:
+                    subjects.append(name)
+        except Exception:
+            pass
+
+    # Grey and unsaturated is not sufficient: static, noise and many synthetic
+    # images satisfy the asphalt rule too. A photographed surface has coherent
+    # texture — edges concentrated along features. Edges everywhere at once
+    # means there is no scene, just high-frequency content.
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edge_density = float((cv2.Canny(gray, 70, 180) > 0).sum()) / float(h * w)
+    incoherent = edge_density > 0.30   # static or noise, not a scene
+    featureless = edge_density < MIN_EDGE_DENSITY  # drawing, screenshot, flat fill
+
+    ok = (
+        road_fraction >= MIN_ROAD_FRACTION
+        and not subjects
+        and not incoherent
+        and not featureless
+    )
+    return {
+        "road_fraction": round(road_fraction, 4),
+        "edge_density": round(edge_density, 4),
+        "looks_civic": ok,
+        "reason": (
+            f"the photograph is mostly of a {subjects[0]}, not a place" if subjects
+            else "not a photograph of a surface — no coherent texture" if incoherent
+            else "too flat to be a photograph of a real surface" if featureless
+            else "no road or ground surface could be segmented" if road_fraction < MIN_ROAD_FRACTION
+            else "road surface detected"
+        ),
+    }
+
+
 def detect(data: bytes, conf: float = 0.25) -> dict:
     """Run detection and return structured results plus an annotated image."""
     img = _read_image(data)
@@ -99,34 +342,153 @@ def detect(data: bytes, conf: float = 0.25) -> dict:
     frame_area = float(h * w)
     mode = get_mode()
 
+    detector = mode
     if mode == "HEURISTIC":
         dets = heuristic_detect(img)
     else:
         model, _ = get_model()
-        results = model.predict(img, conf=conf, verbose=False)[0]
-        names = results.names
-        dets = []
-        for b in results.boxes:
-            raw = names.get(int(b.cls.item()), str(int(b.cls.item())))
-            label = RDD_CLASSES.get(raw, raw)
-            x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
-            area = max(0.0, (x2 - x1)) * max(0.0, (y2 - y1))
-            dets.append(Detection(
-                label=label,
-                confidence=round(float(b.conf.item()), 4),
-                box=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
-                area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
-            ))
+        dets = _predict(model, img, conf, frame_area)
+
+        # A whole-frame pass reliably finds the nearest, largest defect and
+        # routinely misses the smaller ones further up the road — they occupy
+        # too few pixels once the frame is squeezed to the network input. So
+        # the tiled pass runs even when the frame found something, and the
+        # results are merged.
+        #
+        # The catch is that a tile is a crop with no context, and a close crop
+        # of cracked asphalt reads as a garbage pile: at a 6x4 grid this image
+        # returned eleven detections, most of them "Garbage Pile" above 0.5, on
+        # a road with no garbage in it. So tiled results are admitted only for
+        # the civic category the whole-frame pass already established — a tile
+        # may add another pothole to a road scene, never a new category.
+        if dets:
+            established = TAX.category_of(
+                max(dets, key=lambda d: d.confidence).label
+            )
+            extra = [
+                d for d in _predict_tiled(model, img, conf, frame_area, grid=(4, 3))
+                if TAX.category_of(d.label) == established
+            ]
+            if extra:
+                merged = _nms(dets + extra)
+                if len(merged) > len(dets):
+                    dets = merged
+                    detector = "TRAINED+TILED"
+        # A wide street photograph puts each defect in a handful of pixels once
+        # the frame is squeezed to the network's input size, and the detector
+        # then reports nothing at all — the training photographs are close
+        # range. Re-running over overlapping tiles restores the scale the model
+        # was trained at. Only done when the whole-frame pass came back empty,
+        # so the common case still costs a single inference.
+        if not dets:
+            # A lower threshold is defensible here precisely because the normal
+            # pass found nothing: the alternative is reporting "no damage" on a
+            # photograph that plainly shows some. These come back with genuinely
+            # low confidence, which the severity score already accounts for —
+            # confidence is a multiplier in it — so a marginal detection lands
+            # as a low-severity complaint for human triage rather than a
+            # confident claim.
+            # The threshold here is deliberately NOT lowered below the normal
+            # one. Tiles are small crops, and a crop of ordinary asphalt looks
+            # enough like several classes that a permissive threshold invents
+            # detections — a cracked road came back as "Open Manhole" at 0.27
+            # and was routed to Water Supply. Sending a complaint to the wrong
+            # department is worse than sending it to a human: "no damage
+            # detected — manual triage required" is a correct answer, a
+            # confident wrong class is not.
+            dets = [d for d in _predict_tiled(model, img, conf, frame_area)
+                    if d.confidence >= TILED_MIN_CONF]
+            if dets:
+                detector = "TRAINED+TILED"
+
+        # Last resort: the classical detector. A learned model only recognises
+        # what resembles its training set, and this one was trained on
+        # dashcam-style road photography — it returns nothing at all on, for
+        # example, a close bright shot of a road crazed edge to edge, because
+        # there is no bounded object to find, only texture. The geometric
+        # detector has no such blind spot: it measures darkness and edge
+        # density, so it still localises the damage. It is less precise, hence
+        # its position last, but reporting a lower-confidence region beats
+        # reporting nothing on a photograph that plainly shows damage.
+        if not dets:
+            fallback = heuristic_detect(img)
+            if fallback:
+                dets = fallback
+                detector = "CLASSICAL_FALLBACK"
+
+    # Is this a photograph of a place at all?
+    #
+    # Only worth asking when nothing was found. If the detector located civic
+    # damage then the photograph is self-evidently of the right subject, and
+    # running the check anyway would reject legitimate close-ups — a photo
+    # filled by a garbage pile has almost no road surface in it.
+    #
+    # When nothing was found there are two very different explanations, and the
+    # user needs to be told which: a road with no damage on it, or a photograph
+    # that is not of a road. "No damage detected" is useless advice to someone
+    # who uploaded a picture of a robot.
+    scene = (
+        {"road_fraction": None, "edge_density": None, "looks_civic": True,
+         "reason": "civic damage detected in the photograph"}
+        if dets else assess_scene(img)
+    )
 
     annotated = _annotate(img, dets)
     severity = score_severity(dets)
 
+    # Which civic category dominates this photo? The class with the largest
+    # weighted contribution decides the category, and therefore the department.
+    routing = route_from_detections(dets)
+
+    payload = []
+    for d in dets:
+        item = asdict(d)
+        item["category"] = TAX.category_of(d.label)
+        payload.append(item)
+
     return {
         "model_mode": mode,
+        # Which stage actually produced these boxes: the trained model, the
+        # tiled re-run, or the classical detector. Surfaced so a low-confidence
+        # fallback result is never mistaken for a confident model prediction.
+        "detector": detector,
         "image_size": {"width": w, "height": h},
-        "detections": [asdict(d) for d in dets],
+        "detections": payload,
         "severity": severity,
+        "routing": routing,
+        "scene": scene,
         "annotated_png_b64": _to_b64_png(annotated),
+    }
+
+
+def route_from_detections(dets: list["Detection"]) -> dict:
+    """Pick the dominant category (and hence department) from the detections.
+
+    Each detection contributes class_weight x sqrt(area) x confidence, so a
+    single large critical hazard outranks several small nuisances.
+    """
+    if not dets:
+        return {"category": None, "department": None, "department_name": None, "sla_hours": None}
+
+    scores: dict[str, float] = {}
+    for d in dets:
+        cat = TAX.category_of(d.label)
+        if not cat:
+            continue
+        contrib = TAX.weight_of(d.label) * (d.area_ratio ** 0.5) * d.confidence
+        scores[cat] = scores.get(cat, 0.0) + contrib
+
+    if not scores:
+        return {"category": None, "department": None, "department_name": None, "sla_hours": None}
+
+    top = max(scores, key=scores.get)
+    meta = TAX.CATEGORIES[top]
+    return {
+        "category": top,
+        "department": meta["dept"],
+        "department_name": meta["dept_name"],
+        "sla_hours": meta["sla"],
+        "category_scores": {k: round(v, 4) for k, v in sorted(scores.items(), key=lambda kv: -kv[1])},
     }
 
 
@@ -201,12 +563,72 @@ def _road_mask(img: np.ndarray) -> np.ndarray:
     contours, _ = cv2.findContours(road, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filled = np.zeros_like(road)
     cv2.drawContours(filled, contours, -1, 255, thickness=cv2.FILLED)
+
+    # Only SMALL holes are damage. Filling every enclosed region also swallows
+    # whatever the carriageway happens to wrap around — buildings, shopfronts,
+    # the far background — and their dark windows and shadows then read as
+    # potholes. A pothole is small relative to the road it sits in; a building
+    # is not, so holes above a fraction of the road area are carved back out.
+    road_area = float((road > 0).sum())
+    added = cv2.subtract(filled, road)
+    if road_area > 0 and added.any():
+        n_add, add_labels, add_stats, _ = cv2.connectedComponentsWithStats(added, 8)
+        for i in range(1, n_add):
+            if add_stats[i, cv2.CC_STAT_AREA] > 0.12 * road_area:
+                filled[add_labels == i] = 0
+
+    # ...but hole-filling is indiscriminate: a car parked on the carriageway is
+    # also a hole in the grey mask, and filling puts it back. Vehicles and
+    # pedestrians are therefore cut out here, AFTER the fill, so they cannot be
+    # analysed as road surface. Without this a car reads as alligator cracking —
+    # it is dark, textured and highly edge-dense.
+    for x1, y1, x2, y2 in _occluder_boxes(img):
+        filled[y1:y2, x1:x2] = 0
+
     return filled
+
+
+def _structure_mask(gray: np.ndarray) -> np.ndarray:
+    """Regions belonging to built structure rather than the ground plane.
+
+    Buildings, poles, railings and hoardings are made of long straight edges,
+    and near-vertical ones especially: a facade, a pillar, a lamp post. Road
+    damage has no such geometry — a pothole outline is irregular and closed,
+    a crack wanders. So long straight near-vertical lines are strong evidence
+    that a region is upright structure seen side-on, not surface underfoot.
+
+    This matters because a building facade is grey and low-saturation, which is
+    exactly what the asphalt rule looks for, so segmentation alone lets dark
+    windows and doorways through as potholes.
+    """
+    h, w = gray.shape[:2]
+    mask = np.zeros((h, w), np.uint8)
+    edges = cv2.Canny(gray, 60, 170)
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi / 180, threshold=60,
+        minLineLength=int(0.14 * h), maxLineGap=8,
+    )
+    if lines is None:
+        return mask
+    for x1, y1, x2, y2 in lines[:, 0]:
+        dx, dy = abs(int(x2) - int(x1)), abs(int(y2) - int(y1))
+        # near-vertical: rises much faster than it runs
+        if dy > 2.0 * dx:
+            cv2.line(mask, (int(x1), int(y1)), (int(x2), int(y2)), 255, 9)
+    return cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)))
+
+
+def _structure_overlap(mask: np.ndarray, x: int, y: int, bw: int, bh: int) -> float:
+    if mask is None or bw <= 0 or bh <= 0:
+        return 0.0
+    win = mask[y:y + bh, x:x + bw]
+    return float((win > 0).sum()) / float(bw * bh) if win.size else 0.0
 
 
 def _road_coverage(mask: np.ndarray, x: int, y: int, bw: int, bh: int) -> float:
     sub = mask[y:y + bh, x:x + bw]
     return float((sub > 0).mean()) if sub.size else 0.0
+
 
 
 def heuristic_detect(img: np.ndarray) -> list["Detection"]:
@@ -225,6 +647,9 @@ def heuristic_detect(img: np.ndarray) -> list["Detection"]:
 
     MIN_ROAD_COVER = 0.6      # a box must be mostly ON the road
     MAX_AREA = 0.45           # reject frame-spanning boxes
+    MAX_STRUCTURE = 0.18      # reject boxes sitting on built structure
+
+    structure = _structure_mask(gray)
 
     # --- potholes: dark blobs on the road, below local road brightness
     dark_thresh = max(0, road_mean - 0.6 * road_std)
@@ -245,6 +670,8 @@ def heuristic_detect(img: np.ndarray) -> list["Detection"]:
             continue
         if _road_coverage(road, x, y, bw, bh) < MIN_ROAD_COVER:
             continue
+        if _structure_overlap(structure, x, y, bw, bh) > MAX_STRUCTURE:
+            continue  # a dark window or doorway, not a hole in the ground
         darkness = 1.0 - (float(gray[y:y + bh, x:x + bw].mean()) / 255.0)
         conf = max(0.4, min(0.93, 0.4 * fill + 0.6 * darkness))
         dets.append(Detection("Pothole", round(conf, 4),
@@ -265,18 +692,20 @@ def heuristic_detect(img: np.ndarray) -> list["Detection"]:
             continue
         if _road_coverage(road, x, y, bw, bh) < MIN_ROAD_COVER:
             continue
+        if _structure_overlap(structure, x, y, bw, bh) > MAX_STRUCTURE:
+            continue  # facade or railing edges, not surface cracking
         fill = area / rect_area if rect_area else 0.0
         aspect = bw / bh if bh else 999.0
         edge_density = float(edges[y:y + bh, x:x + bw].mean()) / 255.0
         if edge_density < 0.12:
             continue
 
+        # Only the crack class the taxonomy still carries. Directional cracking
+        # (transverse / longitudinal) was retired, so a region that looks like
+        # one is reported as nothing rather than under a label the rest of the
+        # system would fail to route.
         if fill > 0.45 and edge_density > 0.22 and 0.5 < aspect < 2.0:
             label = "Alligator Crack"
-        elif aspect >= 3.0:
-            label = "Transverse Crack"
-        elif aspect <= 0.33:
-            label = "Longitudinal Crack"
         else:
             continue
         conf = max(0.4, min(0.9, 0.4 + edge_density))
@@ -294,7 +723,7 @@ def _annotate(img: np.ndarray, dets: list[Detection]) -> np.ndarray:
     out = img.copy()
     for d in dets:
         x1, y1, x2, y2 = [int(v) for v in d.box]
-        colour = (0, 0, 220) if d.label == "Pothole" else (0, 165, 255)
+        colour = TAX.colour_of(d.label)          # one colour per civic category
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 3)
         tag = f"{d.label} {d.confidence:.2f}"
         (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
@@ -328,7 +757,7 @@ def score_severity(dets: list[Detection]) -> dict:
 
     raw = 0.0
     for d in dets:
-        w = CLASS_SEVERITY_WEIGHT.get(d.label, DEFAULT_WEIGHT)
+        w = TAX.weight_of(d.label)
         raw += w * (d.area_ratio ** 0.5) * d.confidence
 
     multi_bonus = min(0.15, 0.05 * (len(dets) - 1))
@@ -424,77 +853,6 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 
 # ---------------------------------------------------- repair verification
-
-def verify_repair(before: bytes, after: bytes) -> dict:
-    """Feature 4 - decide whether the 'after' photo shows the damage repaired.
-
-    Combines two independent signals:
-      1. Damage reduction  - severity score before vs after (primary)
-      2. Structural change - SSIM between the two frames (sanity check that the
-         engineer actually photographed a changed scene, not resubmitted the
-         same image)
-    """
-    b = detect(before)
-    a = detect(after)
-
-    s_before = b["severity"]["score"]
-    s_after = a["severity"]["score"]
-    reduction = 0.0 if s_before <= 0 else max(0.0, (s_before - s_after) / s_before)
-
-    ssim = _ssim(_read_image(before), _read_image(after))
-
-    # Identical resubmission: high SSIM and effectively no severity change.
-    resubmitted = ssim > 0.97 and abs(s_before - s_after) < 1.0
-
-    if resubmitted:
-        verdict, reason = "REJECTED", "The after-photo is effectively identical to the before-photo."
-    elif s_before <= 0:
-        # No damage was detected in the before-photo, so there is no baseline to
-        # measure a repair against. Never treat this as proof of failure.
-        verdict, reason = (
-            "INCONCLUSIVE",
-            "No damage was detected in the before-photo, so the repair cannot be "
-            "measured automatically. Manual supervisor review required.",
-        )
-    elif s_after <= 0:
-        verdict, reason = "VERIFIED", "No damage detected in the after-photo."
-    elif reduction >= 0.6:
-        verdict, reason = "VERIFIED", f"Damage severity reduced by {reduction * 100:.0f}%."
-    elif reduction >= 0.25:
-        verdict, reason = "INCONCLUSIVE", f"Only a partial reduction of {reduction * 100:.0f}% was measured."
-    else:
-        verdict, reason = "REJECTED", "Damage is still present at comparable severity."
-
-    return {
-        "verdict": verdict,
-        "reason": reason,
-        "severity_before": s_before,
-        "severity_after": s_after,
-        "reduction_pct": round(reduction * 100, 1),
-        "ssim": round(ssim, 4),
-        "detections_before": b["detections"],
-        "detections_after": a["detections"],
-        "annotated_after_b64": a["annotated_png_b64"],
-        "model_mode": b["model_mode"],
-    }
-
-
-def _ssim(img1: np.ndarray, img2: np.ndarray) -> float:
-    """Structural similarity on grayscale, global (single-window) formulation."""
-    g1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY).astype(np.float64)
-    g2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-    g2 = cv2.resize(g2, (g1.shape[1], g1.shape[0]), interpolation=cv2.INTER_AREA).astype(np.float64)
-
-    k1, k2, L = 0.01, 0.03, 255.0
-    c1, c2 = (k1 * L) ** 2, (k2 * L) ** 2
-
-    mu1, mu2 = g1.mean(), g2.mean()
-    var1, var2 = g1.var(), g2.var()
-    cov = ((g1 - mu1) * (g2 - mu2)).mean()
-
-    num = (2 * mu1 * mu2 + c1) * (2 * cov + c2)
-    den = (mu1**2 + mu2**2 + c1) * (var1 + var2 + c2)
-    return float(num / den) if den else 0.0
 
 
 def file_sha(data: bytes) -> str:

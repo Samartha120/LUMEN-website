@@ -9,6 +9,15 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Samartha's backend, mounted alongside the main one. It runs its own
+      // schema and database on :4001, so it is reached under /legacy rather
+      // than sharing /api — the two speak different shapes (trackingId vs ref,
+      // latitude vs lat) and merging the namespaces would break both.
+      "/legacy": {
+        target: "http://localhost:4001",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/legacy/, ""),
+      },
       "/api": { target: "http://localhost:4000", changeOrigin: true },
       "/uploads": { target: "http://localhost:4000", changeOrigin: true },
     },

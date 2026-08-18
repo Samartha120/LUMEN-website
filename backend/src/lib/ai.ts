@@ -13,22 +13,29 @@ export type Severity = {
   instances: number;
   total_area_ratio: number;
 };
+export type Routing = {
+  category: string | null;
+  department: string | null;
+  department_name: string | null;
+  sla_hours: number | null;
+  category_scores?: Record<string, number>;
+};
+
+export type Scene = {
+  road_fraction: number | null;
+  edge_density?: number;
+  looks_civic: boolean;
+  reason: string;
+};
+
 export type DetectResult = {
   model_mode: "TRAINED" | "HEURISTIC" | "FALLBACK";
   image_size: { width: number; height: number };
-  detections: Detection[];
+  detections: (Detection & { category?: string | null })[];
   severity: Severity;
+  routing?: Routing;
+  scene?: Scene;
   annotated_png_b64: string;
-};
-export type VerifyResult = {
-  verdict: "VERIFIED" | "INCONCLUSIVE" | "REJECTED";
-  reason: string;
-  severity_before: number;
-  severity_after: number;
-  reduction_pct: number;
-  ssim: number;
-  annotated_after_b64: string;
-  model_mode: string;
 };
 
 export class AiUnavailableError extends Error {
@@ -75,9 +82,3 @@ export async function embed(buf: Buffer, name = "photo.jpg", type = "image/jpeg"
   return (await post<{ embedding: number[] }>("/embed", fd)).embedding;
 }
 
-export async function verifyRepair(before: Buffer, after: Buffer): Promise<VerifyResult> {
-  const fd = new FormData();
-  fd.append("before", fileFromBuffer(before, "before.jpg", "image/jpeg"));
-  fd.append("after", fileFromBuffer(after, "after.jpg", "image/jpeg"));
-  return post<VerifyResult>("/verify", fd);
-}

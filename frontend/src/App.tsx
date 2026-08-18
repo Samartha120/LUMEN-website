@@ -11,6 +11,9 @@ import { Dashboard } from "./pages/Dashboard";
 import { Complaints } from "./pages/Complaints";
 import { NewComplaint } from "./pages/NewComplaint";
 import { ComplaintDetail } from "./pages/ComplaintDetail";
+import { Assistant } from "./pages/Assistant";
+import { Estimate } from "./pages/Estimate";
+import { Budget } from "./pages/Budget";
 import { Assignment } from "./pages/Assignment";
 import { Gis } from "./pages/Gis";
 import { Engineers } from "./pages/Engineers";
@@ -33,6 +36,9 @@ export function App() {
         <Route path="complaints" element={<Complaints />} />
         <Route path="complaints/new" element={<NewComplaint />} />
         <Route path="complaints/:ref" element={<ComplaintDetail />} />
+        <Route path="assistant" element={<Assistant />} />
+        <Route path="estimate" element={<Estimate />} />
+        <Route path="budget" element={<Budget />} />
         <Route path="assignment" element={<Assignment />} />
         <Route path="gis" element={<Gis />} />
         <Route path="engineers" element={<Engineers />} />

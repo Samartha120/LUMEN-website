@@ -1,3 +1,7 @@
+// Loads backend/.env if present. The file is gitignored and optional — the
+// only key it carries is ANTHROPIC_API_KEY, and the assistant falls back to
+// its local query engine when that is absent.
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -6,7 +10,7 @@ import { fileURLToPath } from "url";
 import { attachSession } from "./lib/auth.js";
 import authRoutes from "./routes/auth.js";
 import complaintRoutes from "./routes/complaints.js";
-import assignmentRoutes from "./routes/assignment.js";
+import assistantRoutes from "./routes/assistant.js";
 import dataRoutes from "./routes/data.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,7 +28,7 @@ app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/complaints", complaintRoutes);
-app.use("/api/assignment", assignmentRoutes);
+app.use("/api/assistant", assistantRoutes);
 app.use("/api", dataRoutes);
 
 app.get("/api/ping", (_req, res) => res.json({ ok: true }));

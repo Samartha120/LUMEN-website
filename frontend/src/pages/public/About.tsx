@@ -6,10 +6,10 @@ export function About() {
         <p>LUMEN is an AI-assisted civic infrastructure platform. A citizen photographs road
         damage; the platform detects and classifies it with computer vision, scores its
         severity, checks it against existing reports, dispatches the right field engineer, and
-        verifies the repair from an after-photo before the case can be closed.</p>
+        routes it to the right department automatically.</p>
         <p>It replaces the disconnected spreadsheets and paper registers municipal departments
         use today with one accountable pipeline — where every action is logged and closure
-        requires both a supervisor's approval and passing AI verification.</p>
+        requires a supervisor's approval.</p>
       </div>
       <h2 className="mt-12 text-xl font-bold text-slate-900">The five pipeline stages</h2>
       <ol className="mt-4 list-inside list-decimal space-y-2 text-slate-600">
@@ -17,7 +17,6 @@ export function About() {
         <li>Severity scoring from detection geometry</li>
         <li>Duplicate detection (image embeddings + geolocation)</li>
         <li>Optimised engineer assignment (Hungarian algorithm)</li>
-        <li>AI-verified repair closure (before/after comparison)</li>
       </ol>
     </div>
   );

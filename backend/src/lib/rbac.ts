@@ -17,7 +17,7 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   { key: "dashboard", label: "Dashboard", href: "/app/dashboard", icon: "LayoutDashboard", roles: ALL_ROLES },
   { key: "complaints", label: "Complaints", href: "/app/complaints", icon: "ClipboardList", roles: ALL_ROLES },
-  { key: "assignment", label: "Assignment Optimiser", href: "/app/assignment", icon: "Route", roles: ["ADMINISTRATOR", "SUPERVISOR"] },
+  { key: "assistant", label: "Assistant", href: "/app/assistant", icon: "Sparkles", roles: ALL_ROLES },
   { key: "gis", label: "GIS Map", href: "/app/gis", icon: "Map", roles: ALL_ROLES },
   { key: "engineers", label: "Engineers", href: "/app/engineers", icon: "HardHat", roles: ["ADMINISTRATOR", "SUPERVISOR"] },
   { key: "audit-logs", label: "Audit Log", href: "/app/audit-logs", icon: "ScrollText", roles: ["ADMINISTRATOR", "SUPERVISOR"] },
@@ -32,7 +32,7 @@ export function canAccess(role: string, moduleKey: string): boolean {
   return item ? item.roles.includes(role) : false;
 }
 
-/** Complaint lifecycle. Closure is gated on AI verification (Feature 4). */
+/** Complaint lifecycle. */
 export type Transition = { to: string; label: string; roles: string[] };
 
 const MANAGERIAL = ["SUPERVISOR", "ADMINISTRATOR"];
@@ -64,6 +64,7 @@ export const STATUS_LABELS: Record<string, string> = {
 export const DAMAGE_CLASSES = [
   "Pothole",
   "Alligator Crack",
-  "Transverse Crack",
-  "Longitudinal Crack",
+  "Garbage Pile",
+  "Overflowing Bin",
+  "Open Manhole",
 ];

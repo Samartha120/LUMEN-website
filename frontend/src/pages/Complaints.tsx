@@ -9,7 +9,7 @@ import { PageHeader, EmptyState } from "../components/ui";
 import { StatusBadge, PriorityBadge, SeverityMeter, ModelModeBadge } from "../components/badges";
 
 type Row = {
-  id: string; ref: string; title: string; zone: string; category: string; aiModelMode: string | null;
+  id: string; ref: string; title: string; zone: string; category: string; civicCategory: string | null; aiModelMode: string | null;
   severityScore: number | null; severityBand: string | null; priority: string; status: string;
   createdAt: string; department: { name: string }; engineer: { name: string } | null; duplicateOf: { ref: string } | null;
 };

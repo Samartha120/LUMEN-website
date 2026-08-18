@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { ClipboardList, ScanSearch, ShieldCheck, Copy, Cpu, AlertTriangle } from "lucide-react";
+import { ClipboardList, ScanSearch, Copy, Cpu, AlertTriangle } from "lucide-react";
 import { useApi } from "../lib/useApi";
 import { useAuth } from "../auth";
 import { ROLE_LABELS } from "../lib/rbac";
@@ -7,12 +7,14 @@ import { fmtDateTime } from "../lib/format";
 import { KpiCard, Card, PageHeader } from "../components/ui";
 import { StatusBadge, PriorityBadge, SeverityMeter } from "../components/badges";
 import { SimpleBarChart, DonutChart } from "../components/charts";
+import { categoryHex } from "../components/CategoryBadge";
+import { CATEGORIES, type CategoryKey } from "../lib/taxonomy";
 
 const OPEN = ["SUBMITTED", "ASSIGNED", "IN_PROGRESS", "PENDING_REVIEW"];
 type Complaint = {
-  id: string; ref: string; title: string; category: string; status: string; priority: string;
+  id: string; ref: string; title: string; category: string; civicCategory: string | null; status: string; priority: string;
   severityScore: number | null; severityBand: string | null; duplicateOfId: string | null;
-  verifyVerdict: string | null; createdAt: string; engineer: { name: string } | null;
+  createdAt: string; engineer: { name: string } | null;
 };
 type Health = { model_mode: string; note: string } | null;
 
@@ -26,10 +28,16 @@ export function Dashboard() {
 
   const open = complaints.filter((c) => OPEN.includes(c.status));
   const dups = complaints.filter((c) => c.duplicateOfId !== null);
-  const verified = complaints.filter((c) => c.verifyVerdict === "VERIFIED");
-  const rejected = complaints.filter((c) => c.verifyVerdict === "REJECTED");
   const scored = complaints.filter((c) => (c.severityScore ?? 0) > 0);
   const avgSeverity = scored.length ? scored.reduce((s, c) => s + (c.severityScore ?? 0), 0) / scored.length : 0;
+
+  const byCategory = Object.entries(complaints.reduce<Record<string, number>>((a, c) => {
+    const k = c.civicCategory ?? "UNCLASSIFIED";
+    a[k] = (a[k] ?? 0) + 1; return a;
+  }, {})).map(([k, value]) => ({
+    name: k in CATEGORIES ? CATEGORIES[k as CategoryKey].label : "Unclassified",
+    value, color: categoryHex(k),
+  }));
 
   const byClass = Object.entries(complaints.reduce<Record<string, number>>((a, c) => { a[c.category] = (a[c.category] ?? 0) + 1; return a; }, {}))
     .sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value }));
@@ -44,7 +52,7 @@ export function Dashboard() {
 
       {!health ? (
         <div className="mb-5 flex items-center gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <AlertTriangle size={16} /><span><strong>AI service offline.</strong> Detection, duplicate checking and verification are unavailable.</span>
+          <AlertTriangle size={16} /><span><strong>AI service offline.</strong> Detection and duplicate checking are unavailable.</span>
         </div>
       ) : (
         <div className={`mb-5 flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-sm ${health.model_mode === "TRAINED" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : health.model_mode === "HEURISTIC" ? "border-sky-200 bg-sky-50 text-sky-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
@@ -56,12 +64,21 @@ export function Dashboard() {
         <KpiCard label="Open Complaints" value={open.length} sub={`${complaints.length} total`} icon={ClipboardList} tone="brand" />
         <KpiCard label="Mean Severity" value={avgSeverity.toFixed(1)} sub="CV-derived, 0–100" icon={ScanSearch} tone={avgSeverity >= 50 ? "red" : "amber"} />
         <KpiCard label="Duplicates Caught" value={dups.length} sub="image + geo matched" icon={Copy} tone="amber" />
-        <KpiCard label="Repairs Verified" value={verified.length} sub={`${rejected.length} rejected by AI`} icon={ShieldCheck} tone="green" />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card title="Complaints by Damage Class" className="lg:col-span-2"><SimpleBarChart data={byClass} horizontal /></Card>
+        <Card title="By Civic Category"><DonutChart data={byCategory} /></Card>
+      </div>
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card title="Severity Distribution"><DonutChart data={byBand} /></Card>
+        <Card title="Department Load" className="lg:col-span-2">
+          <SimpleBarChart horizontal data={Object.entries(complaints.reduce<Record<string, number>>((a, c) => {
+            const d = c.civicCategory && c.civicCategory in CATEGORIES ? CATEGORIES[c.civicCategory as CategoryKey].deptName : "Unrouted";
+            a[d] = (a[d] ?? 0) + 1; return a;
+          }, {})).sort((x, y) => y[1] - x[1]).map(([label, value]) => ({ label, value }))} />
+        </Card>
       </div>
 
       <Card title="Highest-Severity Open Complaints" className="mt-6">

@@ -1,3 +1,4 @@
+import bcrypt from "bcrypt";
 import { Router } from "express";
 import { db } from "../lib/db.js";
 import { signSession, COOKIE, requireAuth } from "../lib/auth.js";
@@ -11,7 +12,10 @@ router.post("/login", async (req, res) => {
   if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
 
   const user = await db.user.findUnique({ where: { email } });
-  if (!user || user.password !== password) {
+  // bcrypt.compare is deliberately slow and constant-time, so a wrong password
+  // costs the same as a right one — no timing signal, and a leaked database
+  // does not hand over usable credentials.
+  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
     return res.status(401).json({ error: "Invalid credentials. Use one of the demo accounts." });
   }
 

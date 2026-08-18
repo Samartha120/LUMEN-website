@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+  // Samartha's schema generates its own client. Without this it would write to
+  // node_modules/.prisma/client — the same path the main schema uses — and
+  // silently replace the client the rest of the backend depends on.
+  output   = "../node_modules/.prisma/client-legacy"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../database/lumen.db"
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  fullName     String
+  role         String
+  employeeCode String?   @unique
+  latitude     Float?
+  longitude    Float?
+  status       String    @default("AVAILABLE")
+  skills       String?
+  resolvedJobs Int       @default(0)
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  
+  auditLogs    AuditLog[]
+  reportedComplaints Complaint[] @relation("ReportedComplaints")
+  assignedComplaints Complaint[] @relation("AssignedComplaints")
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  users     User[]
+  complaints Complaint[]
+}
+
+model Complaint {
+  id            String    @id @default(uuid())
+  trackingId    String    @unique // e.g., LUM-10482
+  title         String
+  description   String?
+  category      String
+  severity      Int?      // 0-100
+  confidence    Float?    
+  priority      String    // "LOW", "MEDIUM", "HIGH", "CRITICAL"
+  status        String    // "NEW", "PENDING", "ASSIGNED", "IN_PROGRESS", "PENDING_REVIEW", "RESOLVED"
+  
+  latitude      Float?
+  longitude     Float?
+  address       String?
+  ward          String?
+  zone          String?
+  city          String?
+  
+  imageUrl          String?
+  videoUrl          String?
+  processedImageUrl String?
+  
+  departmentId  String?
+  department    Department? @relation(fields: [departmentId], references: [id])
+  
+  reporterId    String?
+  reporter      User?       @relation("ReportedComplaints", fields: [reporterId], references: [id])
+  
+  assignedToId  String?
+  assignedTo    User?       @relation("AssignedComplaints", fields: [assignedToId], references: [id])
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  dispatchRecords DispatchRecord[]
+  aiPrediction    AiPrediction?
+  timeline        ComplaintTimeline[]
+}
+
+model DispatchRecord {
+  id           String    @id @default(uuid())
+  complaintId  String
+  complaint    Complaint @relation(fields: [complaintId], references: [id])
+  department   String    // Snapshot of the department assigned
+  assignedAt   DateTime  @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  createdAt  DateTime @default(now())
+}
+
+model AiPrediction {
+  id              String    @id @default(uuid())
+  complaintId     String    @unique
+  complaint       Complaint @relation(fields: [complaintId], references: [id])
+  damageClass     String
+  confidenceScore Float
+  boundingBoxes   String    // Stored as JSON string
+  metadata        String?   // Stored as JSON string
+  createdAt       DateTime  @default(now())
+}
+
+model ComplaintTimeline {
+  id          String    @id @default(uuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id])
+  status      String
+  notes       String?
+  createdAt   DateTime  @default(now())
+}

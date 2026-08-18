@@ -28,3 +28,13 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   if (na === 0 || nb === 0) return 0;
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
+
+/** Small, deterministic word-overlap score for duplicate complaint text. */
+export function textSimilarity(a: string, b: string): number {
+  const words = (value: string) => new Set(value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
+  const left = words(a), right = words(b);
+  if (!left.size || !right.size) return 0;
+  let common = 0;
+  for (const word of left) if (right.has(word)) common++;
+  return common / (left.size + right.size - common);
+}

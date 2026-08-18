@@ -21,3 +21,8 @@ backend/ai-service/data/
 
 # YOLO model weights (downloaded/trained, not source)
 **/*.pt
+
+# coursework that happens to live in this folder — not part of LUMEN
+NLP_Experiment_*.ipynb
+output/
+tmp/

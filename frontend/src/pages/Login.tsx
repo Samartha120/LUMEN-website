@@ -42,7 +42,7 @@ export function Login() {
         </Link>
         <div>
           <h1 className="max-w-md text-3xl font-bold leading-tight">AI-assisted civic damage operations</h1>
-          <p className="mt-4 max-w-md text-brand-200/80">Sign in to detect road damage from photos, dispatch engineers, and verify repairs — all from one screen.</p>
+          <p className="mt-4 max-w-md text-brand-200/80">Sign in to detect road damage from photos, dispatch engineers, and track repairs — all from one screen.</p>
         </div>
         <p className="flex items-center gap-2 text-sm text-brand-300/70"><ShieldCheck size={16} /> Zero-trust access · Every action is audit-logged</p>
       </div>

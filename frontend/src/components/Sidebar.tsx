@@ -1,12 +1,12 @@
 import { NavLink } from "react-router-dom";
 import {
-  LayoutDashboard, ClipboardList, Route, Map, HardHat, ScrollText, Landmark,
+  LayoutDashboard, ClipboardList, Map, HardHat, ScrollText, Landmark, Sparkles, Calculator, Wallet,
   type LucideIcon,
 } from "lucide-react";
 import type { NavItem } from "../lib/rbac";
 
 const ICONS: Record<string, LucideIcon> = {
-  LayoutDashboard, ClipboardList, Route, Map, HardHat, ScrollText,
+  LayoutDashboard, ClipboardList, Map, HardHat, ScrollText, Sparkles, Calculator, Wallet,
 };
 
 export function Sidebar({ items, roleLabel }: { items: NavItem[]; roleLabel: string }) {

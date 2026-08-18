@@ -1,13 +1,12 @@
 import { Link } from "react-router-dom";
 import {
-  ScanSearch, Gauge, Copy, ShieldCheck, Route, ArrowRight, CheckCircle2,
+  ScanSearch, Gauge, Copy, Route, ArrowRight, CheckCircle2,
 } from "lucide-react";
 
 const FEATURES = [
   { icon: ScanSearch, title: "Damage Detection", desc: "A citizen's photo is analysed by a computer-vision model that localises and classifies road damage — potholes and crack types — with bounding boxes." },
   { icon: Gauge, title: "Severity Scoring", desc: "Each detection is scored 0–100 from its geometry, automatically setting the complaint's priority and SLA." },
   { icon: Copy, title: "Duplicate Detection", desc: "CNN image embeddings plus geospatial proximity catch two citizens reporting the same defect, and merge them." },
-  { icon: ShieldCheck, title: "AI-Verified Closure", desc: "The engineer's after-photo is re-analysed and compared to the before — closure is blocked if the damage remains." },
   { icon: Route, title: "Optimised Assignment", desc: "The Hungarian algorithm assigns every open complaint to the best engineer, minimising total travel and workload." },
 ];
 
@@ -33,7 +32,7 @@ export function Landing() {
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-brand-100/80">
             LUMEN turns a citizen's photograph into a fully-tracked repair: computer-vision
             damage detection, automatic severity and priority, duplicate consolidation,
-            optimised engineer dispatch, and AI-verified closure.
+            optimised engineer dispatch, and budget-aware repair planning.
           </p>
           <div className="mt-10 flex flex-wrap items-center gap-4">
             <Link to="/auth/login" className="inline-flex items-center gap-2 rounded-lg bg-white px-5 py-3 text-sm font-semibold text-brand-900 shadow-lg hover:bg-brand-50">
@@ -57,7 +56,7 @@ export function Landing() {
       <section className="mx-auto max-w-6xl px-6 py-20">
         <h2 className="text-center text-3xl font-bold tracking-tight text-slate-900">One intelligent pipeline</h2>
         <p className="mx-auto mt-3 max-w-2xl text-center text-slate-600">
-          Photo in → detected → scored → de-duplicated → optimally assigned → verified by photo out.
+          Photo in → detected → scored → de-duplicated → optimally assigned → dispatched.
         </p>
         <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-5">
           {FEATURES.map((f, i) => (
@@ -79,7 +78,7 @@ export function Landing() {
             <h2 className="text-3xl font-bold tracking-tight text-slate-900">Accountable by architecture</h2>
             <p className="mt-4 leading-relaxed text-slate-600">
               Every state-changing action is captured in an immutable audit trail. Closure needs
-              a supervisor's approval and passes AI verification first. Role-based access is
+              a supervisor's approval first. Role-based access is
               enforced on the server, not just hidden in the UI.
             </p>
             <ul className="mt-6 space-y-3">

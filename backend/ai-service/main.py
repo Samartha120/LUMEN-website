@@ -5,7 +5,6 @@ Endpoints
   POST /detect          damage detection, severity scoring, annotated image
   POST /embed           perceptual embedding for duplicate detection
   POST /compare         cosine similarity between two embeddings
-  POST /verify          before/after repair verification
 
 Run:  uvicorn main:app --port 8100
 """
@@ -16,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import model as M
+import taxonomy as TAX
 
 app = FastAPI(title="LUMEN AI Service", version="1.0.0")
 
@@ -42,17 +42,34 @@ async def _read(f: UploadFile) -> bytes:
 def health():
     mode = M.get_mode()
     notes = {
-        "TRAINED": "Fine-tuned RDD2022 model in use.",
+        "TRAINED": "Trained civic-damage model in use across all categories.",
         "HEURISTIC": "Classical-CV heuristic detector in use (no trained weights). "
-                     "Localises damage with OpenCV; train.py enables the deep-learning model.",
-        "FALLBACK": "Pretrained COCO model in use — generic objects, not road damage. "
-                    "Train with train.py to enable road-damage classes.",
+                     "Detects road damage with OpenCV; train_multi.py enables the "
+                     "multi-category deep-learning model.",
+        "FALLBACK": "Pretrained COCO model in use — generic objects, not civic damage. "
+                    "Train with train_multi.py to enable the civic classes.",
     }
     return {
         "status": "ok",
         "model_mode": mode,
-        "classes": list(M.RDD_CLASSES.values()),
+        "classes": TAX.YOLO_NAMES,
+        "categories": {
+            k: {"department": v["dept"], "department_name": v["dept_name"], "sla_hours": v["sla"],
+                "classes": [c for c, e in TAX.CLASSES.items() if e["category"] == k]}
+            for k, v in TAX.CATEGORIES.items()
+        },
         "note": notes.get(mode, ""),
+    }
+
+
+@app.get("/taxonomy")
+def taxonomy():
+    """The civic damage taxonomy the detector and routing are built on."""
+    return {
+        "categories": TAX.CATEGORIES,
+        "classes": {name: {**e, "category_name": TAX.CATEGORIES[e["category"]]["dept_name"]}
+                    for name, e in TAX.CLASSES.items()},
+        "yolo_names": TAX.YOLO_NAMES,
     }
 
 
@@ -83,11 +100,3 @@ class ComparePayload(BaseModel):
 def compare(p: ComparePayload):
     return {"cosine": round(M.cosine(p.a, p.b), 6)}
 
-
-@app.post("/verify")
-async def verify(before: UploadFile = File(...), after: UploadFile = File(...)):
-    b, a = await _read(before), await _read(after)
-    try:
-        return M.verify_repair(b, a)
-    except Exception as e:
-        raise HTTPException(500, f"Verification failed: {e}")

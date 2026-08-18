@@ -13,7 +13,7 @@ export function Engineers() {
   if (loading || !data) return <p className="text-slate-400">Loading…</p>;
   return (
     <>
-      <PageHeader title="Field Engineers" subtitle="Skills and live positions feed the assignment optimiser" />
+      <PageHeader title="Field Engineers" subtitle="Skills, zones and live positions across the departments" />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {data.engineers.map((e) => (
           <div key={e.id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

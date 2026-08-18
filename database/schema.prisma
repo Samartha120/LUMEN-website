@@ -11,7 +11,9 @@ datasource db {
 model User {
   id           String      @id @default(cuid())
   email        String      @unique
-  password     String
+  /// bcrypt hash — never the password itself. The column is named for what it
+  /// holds so nobody is tempted to compare it directly.
+  passwordHash String
   name         String
   role         String // ADMINISTRATOR | SUPERVISOR | ENGINEER
   departmentId String?
@@ -19,13 +21,14 @@ model User {
 }
 
 model Department {
-  id         String      @id @default(cuid())
-  code       String      @unique
-  name       String
-  slaTarget  Int // target resolution hours
-  users      User[]
-  engineers  Engineer[]
-  complaints Complaint[]
+  id            String      @id @default(cuid())
+  code          String      @unique
+  name          String
+  civicCategory String      @default("ROADS") // the taxonomy category this department owns
+  slaTarget     Int // target resolution hours
+  users         User[]
+  engineers     Engineer[]
+  complaints    Complaint[]
 }
 
 model Engineer {
@@ -55,7 +58,9 @@ model Complaint {
   lng         Float
 
   // --- Feature 1: CV detection result
-  category     String // damage class predicted by the detector
+  category     String // damage class predicted by the detector (e.g. "Pothole")
+  civicCategory String? // civic category the class belongs to (ROADS/ELECTRICAL/WASTE/WATER/PUBLIC)
+  autoRouted   Boolean @default(false) // was the department chosen by the model?
   aiPredicted  Boolean @default(false) // was the category set by the model?
   aiConfidence Float? // top detection confidence
   aiModelMode  String? // TRAINED | FALLBACK — provenance of the prediction
@@ -65,6 +70,8 @@ model Complaint {
   severityScore Float? // 0-100 computed from detection geometry
   severityBand  String? // MINOR | MODERATE | SIGNIFICANT | SEVERE
   priority      String // LOW | MEDIUM | HIGH | CRITICAL (derived from severity)
+  priorityScore Float? // explainable rule score: severity, safety, location and report pressure
+  priorityFactors String? // JSON audit trail for the priority score
   slaHours      Int
 
   // --- Feature 3: duplicate detection
@@ -74,12 +81,10 @@ model Complaint {
   duplicates    Complaint[] @relation("Duplicates")
   dupSimilarity Float? // cosine similarity to the primary complaint
   dupDistanceM  Float? // metres between the two reports
+  dupScore      Float? // composite image, distance, category and description score
+  dupCategoryMatch Boolean?
+  dupDescriptionSimilarity Float?
 
-  // --- Feature 4: AI-verified closure
-  verifyVerdict   String? // VERIFIED | INCONCLUSIVE | REJECTED
-  verifyReason    String?
-  verifyReduction Float? // % severity reduction measured
-  verifySsim      Float?
 
   // --- Feature 5: assignment optimisation provenance
   assignMethod   String? // OPTIMISED | MANUAL
@@ -96,6 +101,11 @@ model Complaint {
   engineer     Engineer?        @relation(fields: [engineerId], references: [id])
   images       ComplaintImage[]
   events       TimelineEvent[]
+
+  // --- Feature 6: repair material estimation
+  // Set by the engineer on site; decides which mix the estimator uses.
+  roadType     String? // BITUMINOUS | CONCRETE
+  potholes     PotholeMeasurement[]
 
   @@index([status])
   @@index([createdAt])
@@ -132,4 +142,31 @@ model AuditLog {
   target    String
   details   String
   createdAt DateTime @default(now())
+}
+
+/**
+ * A single pothole measured on site by the engineer's team.
+ *
+ * Volume and perimeter are computed on write and stored rather than derived on
+ * read: they are what the material estimate and any submitted BOQ are based
+ * on, so the figure that was signed off must not silently change if the
+ * formula is ever adjusted.
+ */
+model PotholeMeasurement {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  label       String // P1, P2 ... within the complaint
+  lengthM     Float
+  widthM      Float
+  depthM      Float
+  volumeM3    Float // lengthM x widthM x depthM
+  perimeterM  Float // 2 x (lengthM + widthM)
+  recordedBy  String
+  recordedAt  DateTime  @default(now())
+  /// ESTIMATED (from the photograph) | MEASURED (on site). Everything
+  /// downstream shows which, so a planning figure is never read as a survey.
+  source      String    @default("MEASURED")
+
+  @@index([complaintId])
 }

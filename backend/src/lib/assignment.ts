@@ -1,255 +1,185 @@
 /**
- * Feature 5 — optimised engineer assignment.
+ * Engineer assignment — Hungarian (Kuhn–Munkres) minimum-cost matching.
  *
- * Assigning N open complaints to M field engineers is an instance of the
- * classic assignment problem. The naive approach used by most complaint
- * systems is greedy: walk the complaints in priority order and give each one
- * to the nearest free engineer. That is locally sensible but globally poor —
- * an early complaint can consume the one engineer a later, closer complaint
- * needed, inflating total travel.
+ * Ported from Samartha's `backend/index.ts`. His cost model is kept as-is,
+ * because the shape of it is sound:
  *
- * We solve it exactly with the Hungarian algorithm (Kuhn–Munkres), O(n³),
- * minimising total assignment cost across the whole batch simultaneously.
+ *   cost = distance + skillPenalty + workloadPenalty − severityRebate
  *
- * Cost model per (complaint, engineer) pair:
- *     cost = travel_km
- *          + skillPenalty      (engineer not trained on this damage class)
- *          + workloadPenalty   (engineer already carrying open jobs)
- *          + urgencyWeight     (severe complaints pay less to be served first)
- * Infeasible pairs (off-duty, wrong department) are set to a large constant so
- * the algorithm avoids them unless nothing else exists.
+ * with a prohibitive cost for any pairing that is not allowed at all. Two
+ * things are adapted to this schema rather than copied literally:
+ *
+ *   Skill match — his version substring-matched free text ("road" in the
+ *   category against "road" in the skills). Here `Engineer.skills` is an exact
+ *   comma-separated list of damage classes from the taxonomy, and the
+ *   complaint carries its detected class, so the two can be compared exactly.
+ *   Substring matching on this data would be strictly worse: "Pothole" and
+ *   "Open Manhole" both contain "hole".
+ *
+ *   Availability — his check was `status !== 'OFF_DUTY'`. Same here, using
+ *   this schema's Engineer.status.
+ *
+ * Why Hungarian rather than assigning each complaint to its nearest engineer:
+ * greedy is locally sensible and globally worse. The first complaint takes the
+ * one engineer a later, closer complaint needed, and every subsequent choice
+ * inherits that mistake. Hungarian solves the whole board at once in O(n³) and
+ * is provably minimal. The greedy baseline is computed alongside and returned,
+ * because that comparison is the entire justification for the algorithm.
  */
-import { haversineMeters } from "./geo";
+import computeMunkres from "munkres-js";
+import { haversineMeters } from "./geo.js";
+
+/** Pairing forbidden outright — wrong department, or engineer off duty. */
+const FORBIDDEN = 1_000_000;
+/** Added when the engineer does not hold the detected damage class. */
+const SKILL_PENALTY = 8;
+/** Added per job already on the engineer's plate, to spread load. */
+const WORKLOAD_PENALTY = 3;
+/** Subtracted at full severity, so bad damage outbids mere convenience. */
+const SEVERITY_REBATE = 12;
 
 export type AssignComplaint = {
-  id: string;
-  ref: string;
-  lat: number;
-  lng: number;
-  category: string;
-  severityScore: number;
-  departmentId: string;
+  id: string; ref: string; title: string; category: string; priority: string;
+  lat: number; lng: number; severityScore: number | null; departmentId: string;
 };
-
 export type AssignEngineer = {
-  id: string;
-  code: string;
-  name: string;
-  lat: number;
-  lng: number;
-  skills: string;
-  status: string;
-  departmentId: string;
-  openJobs: number;
+  id: string; code: string; name: string; zone: string; skills: string;
+  status: string; lat: number; lng: number; departmentId: string;
+  complaints: { id: string }[];
 };
-
-export const INFEASIBLE = 1e6;
-const SKILL_PENALTY_KM = 8;
-const WORKLOAD_PENALTY_KM = 3;
-const URGENCY_WEIGHT_KM = 12;
-
-export function pairCost(c: AssignComplaint, e: AssignEngineer): number {
-  if (e.status === "OFF_DUTY" || e.departmentId !== c.departmentId) return INFEASIBLE;
-
-  const km = haversineMeters(c.lat, c.lng, e.lat, e.lng) / 1000;
-  const skilled = e.skills.split(",").map((s) => s.trim()).includes(c.category);
-  const skillPenalty = skilled ? 0 : SKILL_PENALTY_KM;
-  const workloadPenalty = e.openJobs * WORKLOAD_PENALTY_KM;
-  // Severe complaints get a cost rebate so the optimiser serves them first.
-  const urgencyRebate = (c.severityScore / 100) * URGENCY_WEIGHT_KM;
-
-  return km + skillPenalty + workloadPenalty - urgencyRebate;
-}
-
-/**
- * Hungarian algorithm (Jonker–Volgenant style potentials), rectangular-safe.
- * Returns assignment[j] = row index assigned to column j, or -1.
- */
-export function hungarian(cost: number[][]): number[] {
-  const n = cost.length;
-  if (n === 0) return [];
-  const m = cost[0].length;
-  const dim = Math.max(n, m);
-
-  // pad to square with zero-cost dummy cells
-  const a: number[][] = Array.from({ length: dim }, (_, i) =>
-    Array.from({ length: dim }, (_, j) => (i < n && j < m ? cost[i][j] : 0))
-  );
-
-  const INF = Number.POSITIVE_INFINITY;
-  const u = new Array(dim + 1).fill(0);
-  const v = new Array(dim + 1).fill(0);
-  const p = new Array(dim + 1).fill(0); // p[j] = row matched to column j
-  const way = new Array(dim + 1).fill(0);
-
-  for (let i = 1; i <= dim; i++) {
-    p[0] = i;
-    let j0 = 0;
-    const minv = new Array(dim + 1).fill(INF);
-    const used = new Array(dim + 1).fill(false);
-
-    do {
-      used[j0] = true;
-      const i0 = p[j0];
-      let delta = INF;
-      let j1 = 0;
-      for (let j = 1; j <= dim; j++) {
-        if (used[j]) continue;
-        const cur = a[i0 - 1][j - 1] - u[i0] - v[j];
-        if (cur < minv[j]) {
-          minv[j] = cur;
-          way[j] = j0;
-        }
-        if (minv[j] < delta) {
-          delta = minv[j];
-          j1 = j;
-        }
-      }
-      for (let j = 0; j <= dim; j++) {
-        if (used[j]) {
-          u[p[j]] += delta;
-          v[j] -= delta;
-        } else {
-          minv[j] -= delta;
-        }
-      }
-      j0 = j1;
-    } while (p[j0] !== 0);
-
-    do {
-      const j1 = way[j0];
-      p[j0] = p[j1];
-      j0 = j1;
-    } while (j0);
-  }
-
-  const assignment = new Array(m).fill(-1);
-  for (let j = 1; j <= dim; j++) {
-    const row = p[j] - 1;
-    if (row >= 0 && row < n && j - 1 < m) assignment[j - 1] = row;
-  }
-  return assignment;
-}
 
 export type Assignment = {
-  complaint: AssignComplaint;
-  engineer: AssignEngineer;
+  complaint: { id: string; ref: string; title: string; category: string; priority: string; severityScore: number };
+  engineer: { id: string; code: string; name: string; zone: string; openJobs: number };
   distanceKm: number;
   cost: number;
   skillMatch: boolean;
 };
 
-export type OptimiseResult = {
+export type AssignmentPlan = {
   assignments: Assignment[];
-  unassigned: AssignComplaint[];
-  /** Objective actually minimised — the fair basis for comparison. */
+  unassigned: { ref: string; title: string; reason: string }[];
   totalCost: number;
-  naiveTotalCost: number;
-  costImprovementPct: number;
-  /** Reported for context only; distance is one term of the cost, not the objective. */
   totalDistanceKm: number;
+  /** Greedy worst-first baseline under the same one-job-per-engineer rule. */
+  naiveTotalCost: number;
   naiveTotalDistanceKm: number;
+  /** How many jobs greedy allocated — should equal the optimal count. */
+  naiveAssigned: number;
+  costImprovementPct: number;
+  engineersConsidered: number;
 };
 
-/** Greedy baseline: highest severity first, each takes its nearest feasible engineer. */
-export function greedyAssign(
-  complaints: AssignComplaint[],
-  engineers: AssignEngineer[]
-): { assignments: Assignment[]; totalDistanceKm: number; totalCost: number } {
-  const taken = new Set<string>();
-  const out: Assignment[] = [];
-  const order = [...complaints].sort((x, y) => y.severityScore - x.severityScore);
+const km = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) =>
+  haversineMeters(a.lat, a.lng, b.lat, b.lng) / 1000;
 
-  for (const c of order) {
-    let best: AssignEngineer | null = null;
-    let bestKm = Infinity;
-    for (const e of engineers) {
-      if (taken.has(e.id)) continue;
-      if (pairCost(c, e) >= INFEASIBLE) continue;
-      const km = haversineMeters(c.lat, c.lng, e.lat, e.lng) / 1000;
-      if (km < bestKm) {
-        bestKm = km;
-        best = e;
-      }
-    }
-    if (best) {
-      taken.add(best.id);
-      out.push({
-        complaint: c,
-        engineer: best,
-        distanceKm: Math.round(bestKm * 100) / 100,
-        cost: Math.round(pairCost(c, best) * 100) / 100,
-        skillMatch: best.skills.split(",").map((s) => s.trim()).includes(c.category),
-      });
-    }
-  }
-  return {
-    assignments: out,
-    totalDistanceKm: Math.round(out.reduce((s, a) => s + a.distanceKm, 0) * 100) / 100,
-    totalCost: Math.round(out.reduce((s, a) => s + a.cost, 0) * 100) / 100,
-  };
+/** Exact match against the engineer's declared damage classes. */
+function hasSkill(engineer: AssignEngineer, damageClass: string): boolean {
+  return engineer.skills
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .includes(damageClass.trim().toLowerCase());
 }
 
-export function optimiseAssignments(
-  complaints: AssignComplaint[],
-  engineers: AssignEngineer[]
-): OptimiseResult {
-  if (complaints.length === 0 || engineers.length === 0) {
-    return {
-      assignments: [],
-      unassigned: complaints,
-      totalCost: 0,
-      naiveTotalCost: 0,
-      costImprovementPct: 0,
-      totalDistanceKm: 0,
-      naiveTotalDistanceKm: 0,
-    };
-  }
+function pairCost(c: AssignComplaint, e: AssignEngineer): number {
+  if (e.departmentId !== c.departmentId || e.status === "OFF_DUTY") return FORBIDDEN;
+  const distance = km(c, e);
+  const skill = hasSkill(e, c.category) ? 0 : SKILL_PENALTY;
+  const workload = WORKLOAD_PENALTY * e.complaints.length;
+  const rebate = SEVERITY_REBATE * ((c.severityScore ?? 0) / 100);
+  return Math.max(0, distance + skill + workload - rebate);
+}
 
-  // rows = complaints, columns = engineers
-  const cost = complaints.map((c) => engineers.map((e) => pairCost(c, e)));
-  const colToRow = hungarian(cost);
+export function computeAssignmentPlan(
+  complaints: AssignComplaint[],
+  engineers: AssignEngineer[],
+): AssignmentPlan {
+  const empty: AssignmentPlan = {
+    assignments: [], unassigned: [], totalCost: 0, totalDistanceKm: 0,
+    naiveTotalCost: 0, naiveTotalDistanceKm: 0, naiveAssigned: 0, costImprovementPct: 0,
+    engineersConsidered: engineers.length,
+  };
+  if (complaints.length === 0 || engineers.length === 0) return empty;
+
+  const matrix = complaints.map((c) => engineers.map((e) => pairCost(c, e)));
+
+  // Greedy baseline, under the same constraint as the optimal solution: one
+  // engineer takes one job this round. Complaints are served worst-first —
+  // the order a supervisor would work in — and each takes the cheapest
+  // engineer still free.
+  //
+  // The constraint matters. The original version let greedy reuse engineers,
+  // so it summed a cost for every complaint while Hungarian summed one per
+  // engineer. That produced a flattering ~90% "improvement" which was really
+  // just 28 assignments being compared against 6. Both sides now allocate the
+  // same number of jobs, so the difference is the algorithm and nothing else.
+  let naiveCost = 0, naiveDist = 0, naiveCount = 0;
+  const takenByGreedy = new Set<number>();
+  for (const [i, c] of complaints.entries()) {
+    let best = Infinity, bestIdx = -1;
+    for (const [j, cost] of matrix[i].entries()) {
+      if (takenByGreedy.has(j)) continue;
+      if (cost < best && cost < FORBIDDEN) { best = cost; bestIdx = j; }
+    }
+    if (bestIdx >= 0) {
+      takenByGreedy.add(bestIdx);
+      naiveCost += best;
+      naiveDist += km(c, engineers[bestIdx]);
+      naiveCount++;
+    }
+  }
 
   const assignments: Assignment[] = [];
-  const assignedRows = new Set<number>();
+  let totalCost = 0, totalDist = 0;
 
-  for (let j = 0; j < engineers.length; j++) {
-    const i = colToRow[j];
-    if (i < 0 || i >= complaints.length) continue;
-    if (cost[i][j] >= INFEASIBLE) continue; // never force an infeasible pair
-    const c = complaints[i];
-    const e = engineers[j];
-    const km = haversineMeters(c.lat, c.lng, e.lat, e.lng) / 1000;
+  for (const [ci, ei] of computeMunkres(matrix) as number[][]) {
+    const cost = matrix[ci][ei];
+    // Munkres pads to a square matrix and will happily return a forbidden
+    // pairing when there are more complaints than engineers. Drop those.
+    if (cost >= FORBIDDEN) continue;
+    const c = complaints[ci], e = engineers[ei];
+    const distanceKm = km(c, e);
+    totalCost += cost;
+    totalDist += distanceKm;
     assignments.push({
-      complaint: c,
-      engineer: e,
-      distanceKm: Math.round(km * 100) / 100,
-      cost: Math.round(cost[i][j] * 100) / 100,
-      skillMatch: e.skills.split(",").map((s) => s.trim()).includes(c.category),
+      complaint: {
+        id: c.id, ref: c.ref, title: c.title, category: c.category,
+        priority: c.priority, severityScore: c.severityScore ?? 0,
+      },
+      engineer: { id: e.id, code: e.code, name: e.name, zone: e.zone, openJobs: e.complaints.length },
+      distanceKm: Math.round(distanceKm * 100) / 100,
+      cost: Math.round(cost * 100) / 100,
+      skillMatch: hasSkill(e, c.category),
     });
-    assignedRows.add(i);
   }
 
-  const totalDistanceKm =
-    Math.round(assignments.reduce((s, a) => s + a.distanceKm, 0) * 100) / 100;
-  const totalCost = Math.round(assignments.reduce((s, a) => s + a.cost, 0) * 100) / 100;
-  const naive = greedyAssign(complaints, engineers);
-
-  // Compare on cost — the objective the Hungarian algorithm minimises. Comparing
-  // on distance alone would be unfair in both directions: the optimiser will
-  // happily accept a longer drive to reach a skilled, less-loaded engineer.
-  // Costs can be negative (urgency rebates), so normalise by magnitude.
-  const denom = Math.abs(naive.totalCost);
-  const costImprovementPct =
-    denom > 1e-9 ? Math.round(((naive.totalCost - totalCost) / denom) * 1000) / 10 : 0;
+  const taken = new Set(assignments.map((a) => a.complaint.id));
+  const unassigned = complaints
+    .filter((c) => !taken.has(c.id))
+    .map((c) => {
+      const eligible = engineers.filter(
+        (e) => e.departmentId === c.departmentId && e.status !== "OFF_DUTY",
+      );
+      return {
+        ref: c.ref,
+        title: c.title,
+        reason: eligible.length === 0
+          ? "No available engineer in the responsible department"
+          : "Every eligible engineer was matched to a higher-priority complaint this round",
+      };
+    });
 
   return {
     assignments,
-    unassigned: complaints.filter((_, i) => !assignedRows.has(i)),
-    totalCost,
-    naiveTotalCost: naive.totalCost,
-    costImprovementPct,
-    totalDistanceKm,
-    naiveTotalDistanceKm: naive.totalDistanceKm,
+    unassigned,
+    totalCost: Math.round(totalCost * 100) / 100,
+    totalDistanceKm: Math.round(totalDist * 10) / 10,
+    naiveTotalCost: Math.round(naiveCost * 100) / 100,
+    naiveTotalDistanceKm: Math.round(naiveDist * 10) / 10,
+    naiveAssigned: naiveCount,
+    costImprovementPct: naiveCost > 0
+      ? Math.round(((naiveCost - totalCost) / naiveCost) * 1000) / 10
+      : 0,
+    engineersConsidered: engineers.length,
   };
 }

@@ -9,7 +9,7 @@ set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 echo "→ starting AI service (backend/ai-service) on :8100"
-( cd "$ROOT/backend/ai-service" && python3 -m uvicorn main:app --port 8100 ) > /tmp/lumen-ai.log 2>&1 &
+( cd "$ROOT/backend/ai-service" && .venv/bin/python3 -m uvicorn main:app --port 8100 ) > /tmp/lumen-ai.log 2>&1 &
 
 echo "→ starting backend (Express) on :4000"
 ( cd "$ROOT/backend" && npm run start ) > /tmp/lumen-backend.log 2>&1 &

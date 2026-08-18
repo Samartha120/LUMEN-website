@@ -2,8 +2,7 @@ const F: [string, string[]][] = [
   ["Computer-Vision Detection", ["YOLO object detection localises and classifies road damage", "Four classes: pothole, longitudinal / transverse / alligator crack", "Annotated image with bounding boxes returned per complaint"]],
   ["Severity & Priority", ["Score 0–100 from damage area, count and confidence", "Automatically sets complaint priority and SLA deadline"]],
   ["Duplicate Detection", ["512-D CNN image embeddings compared by cosine similarity", "Constrained by Haversine distance and a 72-hour window", "Merges the same defect reported by different citizens"]],
-  ["AI-Verified Closure", ["Engineer's after-photo re-analysed and compared to the before", "Severity reduction + SSIM decide the verdict", "Closure blocked automatically if damage remains"]],
-  ["Assignment Optimiser", ["Hungarian algorithm, O(n³), across all open complaints", "Minimises travel + workload with skill constraints", "Benchmarked against a greedy baseline"]],
+  ["Operations Assistant", ["Natural-language questions answered from live database queries", "Intent classification with typo-tolerant entity extraction", "Every figure shown with the rows it was computed from"]],
   ["Security & Audit", ["Role-based access enforced on the server", "Immutable audit log of every state-changing action", "Four-eyes closure approval by a supervisor"]],
 ];
 export function Features() {

@@ -20,19 +20,19 @@ export function Engineers() {
           <div key={e.id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-800">{e.name.split(" ").map((p) => p[0]).slice(0, 2).join("")}</span>
-                <div><h2 className="font-semibold text-slate-900">{e.name}</h2><p className="text-xs text-slate-500">{e.code} · {e.department.name}</p></div>
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-800">{(e.name ?? "?").split(" ").map((p) => p[0] ?? "").slice(0, 2).join("")}</span>
+                <div><h2 className="font-semibold text-slate-900">{e.name ?? "Unknown"}</h2><p className="text-xs text-slate-500">{e.code} · {e.department?.name ?? "—"}</p></div>
               </div>
               <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_STYLE[e.status]}`}>{e.status === "AVAILABLE" ? "Available" : e.status === "ON_TASK" ? "On Task" : "Off Duty"}</span>
             </div>
             <div className="mt-4">
               <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400"><Wrench size={11} /> Damage classes handled</p>
-              <div className="flex flex-wrap gap-1.5">{e.skills.split(",").map((s) => <span key={s} className="rounded bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700">{s.trim()}</span>)}</div>
+              <div className="flex flex-wrap gap-1.5">{(e.skills ?? "").split(",").filter(Boolean).map((s) => <span key={s.trim()} className="rounded bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-700">{s.trim()}</span>)}</div>
             </div>
             <div className="mt-4 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-center text-sm">
-              <div><div className="font-bold text-slate-900">{e.complaints.length}</div><div className="text-[11px] text-slate-500">Open jobs</div></div>
-              <div><div className="font-bold text-slate-900">{e.resolvedJobs}</div><div className="text-[11px] text-slate-500">Resolved</div></div>
-              <div><div className="font-mono text-[11px] font-bold text-slate-700">{e.lat.toFixed(3)}<br />{e.lng.toFixed(3)}</div><div className="text-[11px] text-slate-500">Position</div></div>
+              <div><div className="font-bold text-slate-900">{(e.complaints ?? []).length}</div><div className="text-[11px] text-slate-500">Open jobs</div></div>
+              <div><div className="font-bold text-slate-900">{e.resolvedJobs ?? 0}</div><div className="text-[11px] text-slate-500">Resolved</div></div>
+              <div><div className="font-mono text-[11px] font-bold text-slate-700">{e.lat != null ? e.lat.toFixed(3) : "—"}<br />{e.lng != null ? e.lng.toFixed(3) : "—"}</div><div className="text-[11px] text-slate-500">Position</div></div>
             </div>
           </div>
         ))}

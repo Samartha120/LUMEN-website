@@ -1,83 +1,154 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Plus } from "lucide-react";
+import { Plus, Copy, Layers, History, MapPin } from "lucide-react";
 import { useApi } from "../lib/useApi";
 import { useAuth } from "../auth";
 import { STATUS_LABELS } from "../lib/rbac";
 import { ageOf } from "../lib/format";
 import { PageHeader, EmptyState } from "../components/ui";
-import { StatusBadge, PriorityBadge, SeverityMeter } from "../components/badges";
+import {
+  StatusBadge,
+  PriorityBadge,
+  SeverityMeter,
+  ModelModeBadge,
+} from "../components/badges";
+import type { ListingComplaint, PriorityLevel } from "../lib/types";
+import { PRIORITY_LEVEL_ORDER } from "../lib/types";
 
-type Complaint = {
-  id: string; 
-  trackingId: string; 
-  title: string; 
-  category: string; 
-  severity: number | null; 
-  confidence: number | null;
-  priority: string; 
-  status: string;
-  createdAt: string; 
-  reporter: { fullName: string; email: string } | null;
-  dispatchRecords: { department: string }[];
-};
+const PRIORITY_LEVELS: PriorityLevel[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+
+function sortQueue(list: ListingComplaint[]): ListingComplaint[] {
+  return [...list].sort((a, b) => {
+    const la = PRIORITY_LEVEL_ORDER[(a.priorityLevel as PriorityLevel) ?? "LOW"] ?? 1;
+    const lb = PRIORITY_LEVEL_ORDER[(b.priorityLevel as PriorityLevel) ?? "LOW"] ?? 1;
+    if (la !== lb) return lb - la;
+    const sa = a.priorityScore ?? 0;
+    const sb = b.priorityScore ?? 0;
+    if (Math.abs(sa - sb) > 0.001) return sb - sa;
+    return new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime();
+  });
+}
 
 export function Complaints() {
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
-  const statusFilter = params.get("status") ?? "";
+  const status = params.get("status") ?? "";
+  const priority = params.get("priority") ?? "";
   const q = params.get("q") ?? "";
   const [search, setSearch] = useState(q);
 
-  const { data: complaintsData, loading, error } = useApi<{ complaints: Complaint[] }>("/complaints");
+  const qs = new URLSearchParams();
+  if (status) qs.set("status", status);
+  if (priority) qs.set("priority", priority);
+  if (q) qs.set("q", q);
+  const { data, loading } = useApi<{ complaints: ListingComplaint[] }>(
+    `/complaints${qs.toString() ? `?${qs}` : ""}`,
+  );
 
   const canCreate = ["SUPERVISOR", "ADMINISTRATOR"].includes(user!.role);
   const setStatus = (s: string) => {
     const p = new URLSearchParams(params);
-    if (s) p.set("status", s); else p.delete("status");
+    if (s) p.set("status", s);
+    else p.delete("status");
+    setParams(p);
+  };
+  const setPriorityParam = (pr: string) => {
+    const p = new URLSearchParams(params);
+    if (pr) p.set("priority", pr);
+    else p.delete("priority");
     setParams(p);
   };
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const p = new URLSearchParams(params);
-    if (search) p.set("q", search); else p.delete("q");
+    if (search) p.set("q", search);
+    else p.delete("q");
     setParams(p);
   };
 
-  const allComplaints = complaintsData?.complaints ?? [];
-  const complaints = allComplaints.filter((c) => {
-    if (statusFilter && c.status !== statusFilter) return false;
-    if (search && !c.trackingId.toLowerCase().includes(search.toLowerCase()) && !c.title.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
+  const raw = data?.complaints ?? [];
+  const complaints = sortQueue(raw);
 
   return (
     <>
       <PageHeader
         title="Complaint Queue"
-        subtitle={`${complaints.length} complaint${complaints.length === 1 ? "" : "s"}, ranked by AI severity`}
-        action={canCreate ? (
-          <Link to="/app/complaints/new" className="inline-flex items-center gap-2 rounded-lg bg-brand-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-800">
-            <Plus size={16} /> New Complaint
-          </Link>
-        ) : undefined}
+        subtitle={`${complaints.length} complaint${complaints.length === 1 ? "" : "s"}, ranked by smart priority${user!.role === "ENGINEER" ? " · your assignments only" : ""} · CRITICAL → HIGH → MEDIUM → LOW → score → age`}
+        action={
+          canCreate ? (
+            <Link
+              to="/app/complaints/new"
+              className="inline-flex items-center gap-2 rounded-lg bg-brand-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-800"
+            >
+              <Plus size={16} /> New Complaint
+            </Link>
+          ) : undefined
+        }
       />
 
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <form onSubmit={submitSearch} className="mr-2">
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search title or tracking ID…"
-            className="w-56 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search title or CMP ref…"
+            className="w-56 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+          />
         </form>
-        <button onClick={() => setStatus("")} className={`rounded-full px-3 py-1 text-xs font-medium ${!statusFilter ? "bg-brand-700 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"}`}>All</button>
-        {Object.keys(STATUS_LABELS).map((s) => (
-          <button key={s} onClick={() => setStatus(statusFilter === s ? "" : s)} className={`rounded-full px-3 py-1 text-xs font-medium ${statusFilter === s ? "bg-brand-700 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"}`}>
-            {STATUS_LABELS[s]}
+        <div className="flex items-center gap-1 border-l border-slate-300 pl-2">
+          <button
+            onClick={() => setStatus("")}
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              !status
+                ? "bg-brand-700 text-white"
+                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            All Status
           </button>
-        ))}
+          {Object.keys(STATUS_LABELS).map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatus(status === s ? "" : s)}
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                status === s
+                  ? "bg-brand-700 text-white"
+                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {STATUS_LABELS[s]}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 border-l border-slate-300 pl-2">
+          <button
+            onClick={() => setPriorityParam("")}
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              !priority
+                ? "bg-brand-700 text-white"
+                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            All Priority
+          </button>
+          {PRIORITY_LEVELS.map((p) => (
+            <button
+              key={p}
+              onClick={() => setPriorityParam(priority === p ? "" : p)}
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                priority === p
+                  ? "bg-brand-700 text-white"
+                  : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {loading ? <p className="text-slate-400">Loading…</p> : error ? (
-        <EmptyState title="Complaints unavailable" hint={error} />
+      {loading ? (
+        <p className="text-slate-400">Loading…</p>
       ) : complaints.length === 0 ? (
         <EmptyState title="No complaints match" hint="Try clearing a filter." />
       ) : (
@@ -85,27 +156,100 @@ export function Complaints() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <th className="px-4 py-3">Tracking ID</th><th className="px-4 py-3">Complaint</th><th className="px-4 py-3">Damage Class</th>
-                <th className="px-4 py-3">Severity</th><th className="px-4 py-3">Priority</th><th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Reporter</th><th className="px-4 py-3">Age</th>
+                <th className="px-4 py-3">Ref</th>
+                <th className="px-4 py-3">Complaint</th>
+                <th className="px-4 py-3">Damage Class</th>
+                <th className="px-4 py-3">Severity</th>
+                <th className="px-4 py-3">Priority</th>
+                <th className="px-4 py-3">Duplicates</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Location</th>
+                <th className="px-4 py-3">Engineer</th>
+                <th className="px-4 py-3">Age</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {complaints.map((c) => (
                 <tr key={c.id} className="hover:bg-brand-50/40">
                   <td className="px-4 py-3">
-                    <Link to={`/app/complaints/${c.id}`} className="font-mono text-xs font-bold text-brand-700 hover:underline">{c.trackingId}</Link>
+                    <Link
+                      to={`/app/complaints/${c.ref}`}
+                      className="font-mono text-xs font-bold text-brand-700 hover:underline"
+                    >
+                      {c.ref}
+                    </Link>
+                    {c.duplicateOf && (
+                      <span
+                        title={`Duplicate of ${c.duplicateOf.ref}`}
+                        className="ml-1.5 inline-flex text-amber-600"
+                      >
+                        <Copy size={12} />
+                      </span>
+                    )}
                   </td>
                   <td className="max-w-xs px-4 py-3">
-                    <Link to={`/app/complaints/${c.id}`} className="block truncate font-medium text-slate-800 hover:text-brand-700">{c.title}</Link>
-                    {c.dispatchRecords?.length > 0 && <span className="text-xs text-slate-500">{c.dispatchRecords[0].department}</span>}
+                    <Link
+                      to={`/app/complaints/${c.ref}`}
+                      className="block truncate font-medium text-slate-800 hover:text-brand-700"
+                    >
+                      {c.title}
+                    </Link>
+                    <span className="text-xs text-slate-500">
+                      {c.zone ?? "—"} · {c.department?.name ?? "—"}
+                    </span>
                   </td>
-                  <td className="px-4 py-3"><div className="font-medium text-slate-700">{c.category}</div></td>
-                  <td className="px-4 py-3"><SeverityMeter score={c.severity} band={c.severity && c.severity > 3 ? "SEVERE" : "MODERATE"} compact /></td>
-                  <td className="px-4 py-3"><PriorityBadge priority={c.priority} /></td>
-                  <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
-                  <td className="px-4 py-3 text-slate-600">{c.reporter?.fullName ?? <span className="text-slate-400">Anonymous</span>}</td>
-                  <td className="px-4 py-3 text-slate-500">{ageOf(c.createdAt)}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-slate-700">{c.category}</div>
+                    <ModelModeBadge mode={c.aiModelMode} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <SeverityMeter score={c.severityScore} band={c.severityBand} compact />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <PriorityBadge priority={c.priorityLevel ?? c.priority} />
+                      {c.priorityScore != null && (
+                        <span className="font-mono text-xs font-semibold text-slate-700">
+                          {Math.round(c.priorityScore)}
+                          <span className="text-slate-400">/100</span>
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {typeof c.duplicateCount === "number" && c.duplicateCount > 0 ? (
+                      <span
+                        title={`${c.duplicateCount} complaint${c.duplicateCount === 1 ? "" : "s"} in 500m radius`}
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200"
+                      >
+                        <Layers size={11} />
+                        {c.duplicateCount}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={c.status} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className="inline-flex items-center gap-1 text-xs text-slate-600"
+                      title={`${c.address || c.zone} · ${c.lat?.toFixed(4)}, ${c.lng?.toFixed(4)}`}
+                    >
+                      <MapPin size={12} className="shrink-0 text-slate-400" />
+                      <span className="truncate max-w-[140px]">{c.zone || "Unknown"}</span>
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-slate-600">
+                    {c.engineer?.name ?? <span className="text-slate-400">Unassigned</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+                      <History size={12} className="text-slate-400" />
+                      {ageOf(c.createdAt)}
+                    </span>
+                  </td>
                 </tr>
               ))}
             </tbody>

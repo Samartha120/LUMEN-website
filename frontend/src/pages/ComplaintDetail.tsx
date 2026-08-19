@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft, MapPin, ScanSearch, Copy, GitBranch, UserPlus,
@@ -325,6 +325,10 @@ export const inr = (n: number) =>
 
 const n3 = (v: number) => v.toFixed(3);
 
+/** Mirrors the limits the server enforces on POST /measurements. */
+const MAX_SPAN_M = 50;
+const MAX_DEPTH_M = 5;
+
 /**
  * Feature 6 — site measurements and the material estimate that follows.
  *
@@ -354,8 +358,28 @@ function SiteMeasurements({ complaint, onSaved, canEdit }: { complaint: Complain
   const num = (v: string) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0; };
   const volOf = (r: Row) => num(r.lengthM) * num(r.widthM) * num(r.depthM);
   const perimOf = (r: Row) => 2 * (num(r.lengthM) + num(r.widthM));
-  const total = rows.reduce((t, r) => t + volOf(r), 0);
+  const total = rows.reduce((t, r) => (rowError(r) ? t : t + volOf(r)), 0);
   const complete = rows.filter((r) => volOf(r) > 0).length;
+
+  /**
+   * Same limits the server enforces, checked as the engineer types.
+   *
+   * A pothole is measured in metres, and the commonest mistake is entering
+   * centimetres — 150 x 80 x 12 instead of 1.5 x 0.8 x 0.12, which orders
+   * material for 144 m3 instead of 1.44. Catching it on the row is far clearer
+   * than letting the total read 210 m3 and rejecting the whole form on save.
+   */
+  function rowError(r: Row): string | null {
+    const l = num(r.lengthM), w = num(r.widthM), d = num(r.depthM);
+    const anyEntered = [r.lengthM, r.widthM, r.depthM].some((v) => v.trim() !== "");
+    if (!anyEntered) return null;
+    if (l <= 0 || w <= 0 || d <= 0) return "Length, width and depth must all be greater than zero.";
+    if (l > MAX_SPAN_M || w > MAX_SPAN_M) return `Length and width are in metres — ${MAX_SPAN_M} m is the limit. Did you enter centimetres?`;
+    if (d > MAX_DEPTH_M) return `Depth is in metres — ${MAX_DEPTH_M} m is the limit. A deep pothole is about 0.15 m.`;
+    return null;
+  }
+  const rowErrors = rows.map(rowError);
+  const hasError = rowErrors.some(Boolean);
 
   function setRow(i: number, patch: Partial<Row>) {
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch, source: "MEASURED" } : r)));
@@ -423,29 +447,40 @@ function SiteMeasurements({ complaint, onSaved, canEdit }: { complaint: Complain
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.map((r, i) => (
-              <tr key={i}>
-                <td className="py-1.5 pr-2 font-medium text-slate-700">
-                  {r.label}
-                  {r.source === "ESTIMATED" && (
-                    <span className="ml-1.5 rounded bg-amber-100 px-1 py-0.5 text-[9px] font-semibold uppercase text-amber-700" title="Read off the photograph, not measured">est</span>
+              <Fragment key={i}>
+                <tr>
+                  <td className="py-1.5 pr-2 font-medium text-slate-700">
+                    {r.label}
+                    {r.source === "ESTIMATED" && (
+                      <span className="ml-1.5 rounded bg-amber-100 px-1 py-0.5 text-[9px] font-semibold uppercase text-amber-700" title="Read off the photograph, not measured">est</span>
+                    )}
+                  </td>
+                  {(["lengthM", "widthM", "depthM"] as const).map((f) => (
+                    <td key={f} className="py-1.5 pr-2">
+                      <input type="number" step="0.01" min="0" disabled={!canEdit} value={r[f]}
+                        onChange={(e) => setRow(i, { [f]: e.target.value } as Partial<Row>)}
+                        className={`w-20 rounded border px-2 py-1 text-sm outline-none disabled:bg-slate-50 ${
+                          rowErrors[i] ? "border-red-400 bg-red-50 focus:border-red-500" : "border-slate-300 focus:border-brand-500"
+                        }`} />
+                    </td>
+                  ))}
+                  <td className="py-1.5 pr-2 text-slate-500">{!rowErrors[i] && volOf(r) > 0 ? `${perimOf(r).toFixed(2)} m` : "—"}</td>
+                  <td className="py-1.5 pr-2 font-medium text-slate-800">
+                    {rowErrors[i] ? <span className="text-red-600">check units</span> : volOf(r) > 0 ? `${n3(volOf(r))} m³` : "—"}
+                  </td>
+                  {canEdit && (
+                    <td className="py-1.5">
+                      <button onClick={() => removeRow(i)} disabled={rows.length === 1}
+                        className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"><Trash2 size={14} /></button>
+                    </td>
                   )}
-                </td>
-                {(["lengthM", "widthM", "depthM"] as const).map((f) => (
-                  <td key={f} className="py-1.5 pr-2">
-                    <input type="number" step="0.01" min="0" disabled={!canEdit} value={r[f]}
-                      onChange={(e) => setRow(i, { [f]: e.target.value } as Partial<Row>)}
-                      className="w-20 rounded border border-slate-300 px-2 py-1 text-sm outline-none focus:border-brand-500 disabled:bg-slate-50" />
-                  </td>
-                ))}
-                <td className="py-1.5 pr-2 text-slate-500">{volOf(r) > 0 ? `${perimOf(r).toFixed(2)} m` : "—"}</td>
-                <td className="py-1.5 pr-2 font-medium text-slate-800">{volOf(r) > 0 ? `${n3(volOf(r))} m³` : "—"}</td>
-                {canEdit && (
-                  <td className="py-1.5">
-                    <button onClick={() => removeRow(i)} disabled={rows.length === 1}
-                      className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"><Trash2 size={14} /></button>
-                  </td>
+                </tr>
+                {rowErrors[i] && (
+                  <tr>
+                    <td colSpan={canEdit ? 7 : 6} className="pb-2 text-xs font-medium text-red-700">{rowErrors[i]}</td>
+                  </tr>
                 )}
-              </tr>
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -487,7 +522,7 @@ function SiteMeasurements({ complaint, onSaved, canEdit }: { complaint: Complain
             <input type="number" min="0" max="50" value={wastage} onChange={(e) => setWastage(Number(e.target.value))}
               className="mt-1 block w-20 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-brand-500" />
           </label>
-          <button onClick={save} disabled={busy || complete === 0}
+          <button onClick={save} disabled={busy || complete === 0 || hasError}
             className="inline-flex items-center gap-1.5 rounded-lg bg-brand-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-brand-800 disabled:cursor-not-allowed disabled:bg-slate-300">
             <Calculator size={15} /> {busy ? "Calculating…" : "Save & estimate materials"}
           </button>

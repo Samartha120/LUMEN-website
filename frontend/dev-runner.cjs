@@ -1,106 +1,102 @@
 const { spawn } = require('child_process');
-const fs = require('fs');
+const readline = require('readline');
 const path = require('path');
 
+// Clear terminal and print starting message
 console.clear();
-console.log('\x1b[1;36mStarting LUMEN services...\x1b[0m\n');
+console.log("\x1b[1;36mStarting LUMEN services...\x1b[0m\n");
 
-const backendPath = path.resolve(__dirname, '../backend');
+const backendPath = path.resolve(__dirname, '../../../LUMEN/Lumen-app/backend');
 
-async function startFrontend() {
-  try {
-    const { createServer } = require('vite');
-    const server = await createServer({
-      root: __dirname,
-      server: { port: 5173, open: false }
-    });
-    await server.listen();
-    const info = server.config.server || {};
-    console.log('\x1b[36m[frontend]\x1b[0m Vite dev server ready at http://localhost:5173/');
-    console.log('\x1b[35m[backend]\x1b[0m Expected API endpoint: http://localhost:4000/api/ping');
+// Spawn processes
+const frontend = spawn('npx', ['vite'], {
+  cwd: __dirname,
+  shell: true,
+  stdio: ['inherit', 'pipe', 'pipe'],
+  env: { ...process.env, FORCE_COLOR: 'true' }
+});
 
-    return server;
-  } catch (err) {
-    console.error('\x1b[31m[frontend-err]\x1b[0m Failed to start Vite:', err && err.stack ? err.stack : err);
-    throw err;
-  }
-}
+const backend = spawn('npm', ['run', 'start:dev'], {
+  cwd: backendPath,
+  shell: true,
+  stdio: ['inherit', 'pipe', 'pipe'],
+  env: { ...process.env, FORCE_COLOR: 'true' }
+});
 
-function startBackendIfExists() {
-  if (!fs.existsSync(backendPath)) {
-    console.log('\x1b[33m[backend]\x1b[0m Backend folder not found at', backendPath);
-    return null;
-  }
+function setupStream(proc, name, color) {
+  const rl = readline.createInterface({
+    input: proc,
+    terminal: false
+  });
 
-  const pkg = path.join(backendPath, 'package.json');
-  if (!fs.existsSync(pkg)) {
-    console.log('\x1b[33m[backend]\x1b[0m No package.json in backend folder, skipping backend start.');
-    return null;
-  }
-
-  const npmCmd = process.platform === 'win32' ? 'cmd.exe' : 'npm';
-  const npmArgs = process.platform === 'win32'
-    ? ['/c', 'npm', 'run', 'start:dev']
-    : ['run', 'start:dev'];
-  try {
-    const proc = spawn(npmCmd, npmArgs, {
-      cwd: backendPath,
-      stdio: ['inherit', 'pipe', 'pipe'],
-      env: { ...process.env, FORCE_COLOR: 'true' },
-      shell: false
-    });
-
-    proc.stdout.on('data', (b) => process.stdout.write('\x1b[35m[backend]\x1b[0m ' + b.toString()));
-    proc.stderr.on('data', (b) => process.stderr.write('\x1b[31m[backend-err]\x1b[0m ' + b.toString()));
-
-    proc.on('exit', (code) => console.log(`\x1b[35m[backend]\x1b[0m Backend exited with code ${code}`));
-
-    return proc;
-  } catch (e) {
-    console.error('\x1b[31m[backend-err]\x1b[0m Failed to spawn backend:', e && e.stack ? e.stack : e);
-    return null;
-  }
-}
-
-let viteServer = null;
-let backendProc = null;
-
-(async () => {
-  try {
-    viteServer = await startFrontend();
-  } catch (e) {
-    // If Vite couldn't start, exit after printing error
-    process.exit(1);
-  }
-
-  backendProc = startBackendIfExists();
-
-  // Print combined ready message when frontend is up (backend optional)
-  setTimeout(() => {
-    console.log('\n\x1b[1;32m======================================================================\x1b[0m');
-    console.log('\x1b[1;32m  LUMEN SERVICES RUNNING (frontend started) \x1b[0m');
-    console.log('\x1b[1;32m======================================================================\x1b[0m');
-    console.log('\x1b[1;36m  ➜  Front-End (Web Interface):  \x1b[1;32mhttp://localhost:5173/\x1b[0m');
-    if (backendProc) {
-      console.log('\x1b[1;35m  ➜  Back-End (Express API):      \x1b[1;32mhttp://localhost:4000/\x1b[0m');
-    } else {
-      console.log('\x1b[33m  ➜  Back-End: not started (missing or no package.json)\x1b[0m');
+  rl.on('line', (line) => {
+    // Attempt to parse and beautify NestJS/Pino JSON logs
+    const trimmed = line.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed.level && parsed.msg) {
+          const levelMap = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL' };
+          const levelName = levelMap[parsed.level] || 'LOG';
+          const levelColor = parsed.level >= 50 ? '\x1b[31m' : (parsed.level >= 40 ? '\x1b[33m' : '\x1b[32m');
+          const time = parsed.time ? new Date(parsed.time).toLocaleTimeString() : new Date().toLocaleTimeString();
+          const context = parsed.context ? ` \x1b[36m[${parsed.context}]\x1b[0m` : '';
+          
+          process.stdout.write(`${color}[${name}]\x1b[0m ${time} ${levelColor}${levelName}\x1b[0m${context} ${parsed.msg}\n`);
+          
+          // Print ready message when backend has started
+          if (parsed.msg.includes('Nest application successfully started')) {
+            printReadyMessage();
+          }
+          return;
+        }
+      } catch (e) {
+        // Fallback to printing raw line if JSON parsing fails
+      }
     }
-    console.log('\x1b[1;30m----------------------------------------------------------------------\x1b[0m');
-    console.log('\x1b[1;33m  Press Ctrl+C to terminate.\x1b[0m');
-    console.log('\x1b[1;32m======================================================================\x1b[0m\n');
-  }, 100);
-})();
 
+    // Print raw log line
+    process.stdout.write(`${color}[${name}]\x1b[0m ${line}\n`);
+
+    // In case the backend outputs start message in raw format
+    if (line.includes('Nest application successfully started')) {
+      printReadyMessage();
+    }
+  });
+}
+
+function printReadyMessage() {
+  setTimeout(() => {
+    console.log("\n\x1b[1;32m======================================================================\x1b[0m");
+    console.log("\x1b[1;32m  LUMEN SERVICES RUNNING SUCCESSFULLY! \x1b[0m");
+    console.log("\x1b[1;32m======================================================================\x1b[0m");
+    console.log("\x1b[1;36m  ➜  Front-End (Web Interface):  \x1b[1;32mhttp://localhost:5173/\x1b[0m");
+    console.log("\x1b[1;35m  ➜  Back-End (NestJS API):      \x1b[1;32mhttp://localhost:3000/\x1b[0m");
+    console.log("\x1b[1;30m----------------------------------------------------------------------\x1b[0m");
+    console.log("\x1b[1;33m  Press Ctrl+C to terminate both servers cleanly.\x1b[0m");
+    console.log("\x1b[1;32m======================================================================\x1b[0m\n");
+  }, 100);
+}
+
+setupStream(frontend.stdout, 'frontend', '\x1b[36m');
+setupStream(frontend.stderr, 'frontend-err', '\x1b[31m');
+setupStream(backend.stdout, 'backend', '\x1b[35m');
+setupStream(backend.stderr, 'backend-err', '\x1b[31m');
+
+// Cleanup on exit
+let isCleaningUp = false;
 function cleanup() {
-  console.log('\n\x1b[1;33mStopping services...\x1b[0m\n');
-  if (backendProc && !backendProc.killed) {
-    backendProc.kill();
-  }
-  if (viteServer && typeof viteServer.close === 'function') {
-    viteServer.close();
-  }
-  setTimeout(() => process.exit(), 300);
+  if (isCleaningUp) return;
+  isCleaningUp = true;
+  
+  console.log('\n\x1b[1;33mStopping both processes...\x1b[0m\n');
+  
+  frontend.kill();
+  backend.kill();
+  
+  setTimeout(() => {
+    process.exit();
+  }, 500);
 }
 
 process.on('SIGINT', cleanup);

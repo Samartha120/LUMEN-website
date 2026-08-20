@@ -1,199 +1,174 @@
-import { Link } from "react-router-dom";
-import { ClipboardList, ScanSearch, ShieldCheck, Copy, Cpu, AlertTriangle, MapPin, History, Layers } from "lucide-react";
-import { useApi } from "../lib/useApi";
+import { Activity, ClipboardList, FileText, Users } from "lucide-react";
 import { useAuth } from "../auth";
-import { ROLE_LABELS } from "../lib/rbac";
+import { DonutChart, SimpleBarChart } from "../components/charts";
+import { Card, KpiCard, PageHeader } from "../components/ui";
 import { fmtDateTime } from "../lib/format";
-import { KpiCard, Card, PageHeader } from "../components/ui";
-import { StatusBadge, PriorityBadge, SeverityMeter, FactorBreakdown } from "../components/badges";
-import { SimpleBarChart, DonutChart } from "../components/charts";
-import type { DashboardComplaint, PriorityLevel, PriorityFactors } from "../lib/types";
-import { PRIORITY_LEVEL_ORDER } from "../lib/types";
+import { ROLE_LABELS } from "../lib/rbac";
+import { useApi } from "../lib/useApi";
 
-const OPEN = ["SUBMITTED", "ASSIGNED", "IN_PROGRESS", "PENDING_REVIEW"];
+type DashboardData = {
+  totalUsers: number;
+  totalComplaints: number;
+  usersByRole: { _count: { _all: number }; role: string }[];
+  complaintsByStatus: { _count: { _all: number }; status: string }[];
+  recentAuditLogs: {
+    id: string;
+    action: string;
+    entityType: string;
+    createdAt: string;
+    user: { fullName: string; email: string };
+  }[];
+};
 
-type Health = { model_mode: string; note: string } | null;
-
-function sortDashboardComplaints<T extends DashboardComplaint>(list: T[]): T[] {
-  return [...list].sort((a, b) => {
-    const la = PRIORITY_LEVEL_ORDER[(a.priorityLevel as PriorityLevel) ?? "LOW"] ?? 1;
-    const lb = PRIORITY_LEVEL_ORDER[(b.priorityLevel as PriorityLevel) ?? "LOW"] ?? 1;
-    if (la !== lb) return lb - la;
-    const sa = a.priorityScore ?? 0;
-    const sb = b.priorityScore ?? 0;
-    if (Math.abs(sa - sb) > 0.001) return sb - sa;
-    return new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime();
-  });
-}
+type ComplaintSummary = {
+  id: string;
+  trackingId: string;
+  title: string;
+  priority: string;
+  status: string;
+  createdAt: string;
+};
 
 export function Dashboard() {
   const { user } = useAuth();
-  const { data, loading } = useApi<{ complaints: DashboardComplaint[]; ai: Health }>("/dashboard");
+  const isAdmin = user?.role === "ADMINISTRATOR";
+  const { data, loading, error } = useApi<DashboardData | { complaints: ComplaintSummary[] }>(isAdmin ? "/v1/admin/dashboard" : "/complaints");
 
-  if (loading || !data) return <p className="text-slate-400">Loading…</p>;
-  const complaints = data.complaints;
-  const health = data.ai;
+  if (loading) return <p className="text-slate-400">Loading…</p>;
+  if (error || !data) return <p className="text-slate-400">Dashboard unavailable.</p>;
 
-  const open = complaints.filter((c) => OPEN.includes(c.status as (typeof OPEN)[number]));
-  const dups = complaints.filter((c) => c.duplicateOfId !== null);
-  const verified = complaints.filter((c) => c.verifyVerdict === "VERIFIED");
-  const rejected = complaints.filter((c) => c.verifyVerdict === "REJECTED");
-  const scored = complaints.filter((c) => (c.severityScore ?? 0) > 0);
-  const avgSeverity = scored.length
-    ? scored.reduce((s, c) => s + (c.severityScore ?? 0), 0) / scored.length
-    : 0;
+  if (!isAdmin) {
+    const complaints = (data as { complaints: ComplaintSummary[] }).complaints;
+    const openComplaintsCount = complaints.filter((c) => ["PENDING", "ASSIGNED", "IN_PROGRESS", "PENDING_REVIEW"].includes(c.status)).length;
+    const highPriorityCount = complaints.filter((c) => c.priority === "HIGH" || c.priority === "CRITICAL").length;
+    const recentComplaints = [...complaints].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 5);
 
-  const byClass = Object.entries(
-    complaints.reduce<Record<string, number>>((a, c) => {
-      a[c.category] = (a[c.category] ?? 0) + 1;
-      return a;
-    }, {}),
-  )
-    .sort((a, b) => b[1] - a[1])
-    .map(([label, value]) => ({ label, value }));
+    return (
+      <>
+        <PageHeader
+          title={`Good day, ${user?.name.split(" ")[0] || "Supervisor"}`}
+          subtitle={`${ROLE_LABELS[user?.role ?? ""] || user?.role || "Supervisor"} · LUMEN City Operations`}
+        />
 
-  const bandColors: Record<string, string> = {
-    SEVERE: "#ef4444",
-    SIGNIFICANT: "#f59e0b",
-    MODERATE: "#0ea5e9",
-    MINOR: "#94a3b8",
-    NONE: "#cbd5e1",
-  };
-  const byBand = Object.entries(
-    complaints.reduce<Record<string, number>>((a, c) => {
-      const b = c.severityBand ?? "NONE";
-      a[b] = (a[b] ?? 0) + 1;
-      return a;
-    }, {}),
-  ).map(([name, value]) => ({
-    name: name.charAt(0) + name.slice(1).toLowerCase(),
-    value,
-    color: bandColors[name] ?? "#cbd5e1",
-  }));
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiCard label="Total Complaints" value={complaints.length} sub="Current complaint queue" icon={ClipboardList} tone="brand" />
+          <KpiCard label="Open Issues" value={openComplaintsCount} sub="Pending, assigned, or active" icon={Activity} tone={openComplaintsCount > 0 ? "amber" : "green"} />
+          <KpiCard label="High Priority" value={highPriorityCount} sub="High and critical reports" icon={Users} tone="brand" />
+          <KpiCard label="Recent Reports" value={recentComplaints.length} sub="Latest complaints shown below" icon={FileText} tone="amber" />
+        </div>
 
-  const byPriority = Object.entries(
-    open.reduce<Record<string, number>>((a, c) => {
-      const lv = (c.priorityLevel ?? c.priority ?? "LOW") as string;
-      a[lv] = (a[lv] ?? 0) + 1;
-      return a;
-    }, {}),
-  ).map(([name, value]) => ({ label: name, value }));
+        <Card title="Recent Complaints" className="mt-6">
+          <div className="divide-y divide-slate-100">
+            {recentComplaints.map((item) => (
+              <div key={item.id} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-slate-800">{item.title}</p>
+                  <p className="text-xs text-slate-500">{item.trackingId} · {fmtDateTime(item.createdAt)}</p>
+                </div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.status}</div>
+              </div>
+            ))}
+            {recentComplaints.length === 0 && <p className="py-4 text-sm text-slate-400">No complaints available.</p>}
+          </div>
+        </Card>
+      </>
+    );
+  }
 
-  const topOpen = sortDashboardComplaints(open).slice(0, 6);
+  const adminData = data as DashboardData;
+
+  const statusData = adminData.complaintsByStatus
+    .map((s) => ({
+      name: s.status.charAt(0) + s.status.slice(1).toLowerCase(),
+      value: s._count._all,
+      color:
+        s.status === "PENDING"
+          ? "#f59e0b"
+          : s.status === "RESOLVED"
+            ? "#10b981"
+            : "#3b82f6",
+    }))
+    .sort((a, b) => b.value - a.value);
+
+  const roleData = adminData.usersByRole
+    .map((r) => ({
+      label: r.role,
+      value: r._count._all,
+    }))
+    .sort((a, b) => b.value - a.value);
+
+  const openComplaintsCount = adminData.complaintsByStatus
+    .filter((s) => s.status === "PENDING" || s.status === "ASSIGNED")
+    .reduce((acc, s) => acc + s._count._all, 0);
 
   return (
     <>
       <PageHeader
-        title={`Good day, ${(user?.name ?? "Operator").split(" ")[0] ?? "Operator"}`}
-        subtitle={`${ROLE_LABELS[(user?.role ?? "SUPERVISOR") as keyof typeof ROLE_LABELS]} · AI-assisted civic damage operations`}
+        title={`Good day, ${user?.name.split(" ")[0] || "Admin"}`}
+        subtitle={`${ROLE_LABELS[user!.role] || user!.role} · LUMEN City Operations`}
       />
 
-      {!health ? (
-        <div className="mb-5 flex items-center gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <AlertTriangle size={16} />
-          <span>
-            <strong>AI service offline.</strong> Detection, duplicate checking and verification are unavailable.
-          </span>
-        </div>
-      ) : (
-        <div
-          className={`mb-5 flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-sm ${
-            health.model_mode === "TRAINED"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : health.model_mode === "HEURISTIC"
-              ? "border-sky-200 bg-sky-50 text-sky-900"
-              : "border-amber-200 bg-amber-50 text-amber-900"
-          }`}
-        >
-          <Cpu size={16} />
-          <span>
-            <strong>AI service online</strong> — {health.note}
-          </span>
-        </div>
-      )}
-
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Open Complaints" value={open.length} sub={`${complaints.length} total`} icon={ClipboardList} tone="brand" />
-        <KpiCard label="Mean Severity" value={avgSeverity.toFixed(1)} sub="CV-derived, 0–100" icon={ScanSearch} tone={avgSeverity >= 50 ? "red" : "amber"} />
-        <KpiCard label="Duplicates Caught" value={dups.length} sub="image + geo matched" icon={Copy} tone="amber" />
-        <KpiCard label="Repairs Verified" value={verified.length} sub={`${rejected.length} rejected by AI`} icon={ShieldCheck} tone="green" />
+        <KpiCard
+          label="Total Complaints"
+          value={adminData.totalComplaints}
+          sub="All time reports"
+          icon={ClipboardList}
+          tone="brand"
+        />
+        <KpiCard
+          label="Open Issues"
+          value={openComplaintsCount}
+          sub="Pending or Assigned"
+          icon={Activity}
+          tone={openComplaintsCount > 0 ? "amber" : "green"}
+        />
+        <KpiCard
+          label="Total Users"                 
+          value={adminData.totalUsers}
+          sub="Active citizens & admins"
+          icon={Users}
+          tone="brand"
+        />
+        <KpiCard
+          label="Audit Events"
+          value={adminData.recentAuditLogs.length}
+          sub="Recent actions"
+          icon={FileText}
+          tone="amber"
+        />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <Card title="Complaints by Damage Class" className="lg:col-span-1">
-          <SimpleBarChart data={byClass} horizontal />
+        <Card title="Complaints by Status" className="lg:col-span-1">
+          <DonutChart data={statusData} />
         </Card>
-        <Card title="Severity Distribution" className="lg:col-span-1">
-          <DonutChart data={byBand} />
-        </Card>
-        <Card title="Open By Priority Level" className="lg:col-span-1">
-          <SimpleBarChart data={byPriority} horizontal />
+        <Card title="Users by Role" className="lg:col-span-2">
+          <SimpleBarChart data={roleData} horizontal />
         </Card>
       </div>
 
-      <Card
-        title="Highest-Priority Open Complaints"
-        className="mt-6"
-      >
-        <p className="mb-4 -mt-1 text-xs text-slate-500 border-b border-slate-100 pb-3">Sorted CRITICAL → HIGH → MEDIUM → LOW, then by score, then by complaint age (oldest first).</p>
+      <Card title="Recent System Activity" className="mt-6">
         <div className="divide-y divide-slate-100">
-          {topOpen.length === 0 && <p className="py-4 text-sm text-slate-400">No open complaints.</p>}
-          {topOpen.map((c) => (
-            <div key={c.id} className="grid gap-4 py-4 first:pt-0 last:pb-0 md:grid-cols-[minmax(0,1fr)_auto]">
+          {adminData.recentAuditLogs.map((log) => (
+            <div
+              key={log.id}
+              className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0 hover:bg-slate-50"
+            >
               <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Link to={`/app/complaints/${c.ref}`} className="font-mono text-xs font-bold text-brand-700 hover:underline">
-                    {c.ref}
-                  </Link>
-                  <PriorityBadge priority={c.priorityLevel ?? c.priority} />
-                  <div className="inline-flex items-center gap-1 rounded bg-slate-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200">
-                    {Math.round(c.priorityScore ?? 0)}<span className="text-slate-400">/100</span>
-                  </div>
-                  {typeof c.duplicateCount === "number" && c.duplicateCount > 0 && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
-                      <Layers size={11} />
-                      {c.duplicateCount} duplicate{c.duplicateCount === 1 ? "" : "s"}
-                    </span>
-                  )}
-                </div>
-                <Link to={`/app/complaints/${c.ref}`} className="mt-1 block truncate text-sm font-medium text-slate-800 hover:text-brand-700">
-                  {c.title}
-                </Link>
-                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                  <span>{c.category}</span>
-                  <span>·</span>
-                  <span>{c.engineer?.name ?? "unassigned"}</span>
-                  <span>·</span>
-                  <span className="inline-flex items-center gap-1"><History size={11} /> {fmtDateTime(c.createdAt)}</span>
-                  {c.zone && (
-                    <>
-                      <span>·</span>
-                      <span className="inline-flex items-center gap-1"><MapPin size={11} /> {c.zone}</span>
-                    </>
-                  )}
-                </div>
-                {c.priorityReasons && c.priorityReasons.length > 0 && (
-                  <ul className="mt-2 space-y-0.5 pl-1 text-xs text-slate-500">
-                    {c.priorityReasons.slice(0, 2).map((r, i) => (
-                      <li key={i} className="truncate">
-                        <span className="text-brand-500 font-bold">•</span> {r}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              <div className="flex shrink-0 flex-col items-end gap-2 md:min-w-[220px]">
-                <div className="flex w-full items-center justify-end gap-2">
-                  <StatusBadge status={c.status} />
-                </div>
-                <SeverityMeter score={c.severityScore} band={c.severityBand} compact />
-                <div className="w-full rounded-lg bg-slate-50 p-2.5 ring-1 ring-slate-100">
-                  <FactorBreakdown factors={c.priorityFactors as PriorityFactors | undefined} compact />
-                </div>
+                <p className="mt-0.5 truncate text-sm font-medium text-slate-800">
+                  {log.action} on {log.entityType}
+                </p>
+                <p className="text-xs text-slate-500">
+                  By {log.user.fullName} ({log.user.email}) ·{" "}
+                  {fmtDateTime(log.createdAt)}
+                </p>
               </div>
             </div>
           ))}
+          {adminData.recentAuditLogs.length === 0 && (
+            <p className="py-4 text-sm text-slate-400">No recent activity.</p>
+          )}
         </div>
       </Card>
     </>

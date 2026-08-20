@@ -24,7 +24,7 @@ export function NewComplaint() {
   const label = "mb-1.5 block text-sm font-medium text-slate-700";
   const ai = health?.ai;
 
-  function loadPreviewAndAttachFile(f: File | undefined | null) {
+  function handleFileSelect(f: File | undefined | null) {
     if (!f || !f.type.startsWith("image/")) return;
     setPreview(URL.createObjectURL(f));
     if (inputRef.current) {
@@ -77,7 +77,7 @@ export function NewComplaint() {
               onClick={() => inputRef.current?.click()}
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setDragging(false); loadPreviewAndAttachFile(e.dataTransfer.files?.[0]); }}
+              onDrop={(e) => { e.preventDefault(); setDragging(false); handleFileSelect(e.dataTransfer.files?.[0]); }}
               className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-8 transition ${dragging ? "border-brand-500 bg-brand-50" : "border-slate-300 bg-slate-50 hover:border-brand-400 hover:bg-brand-50/40"}`}
             >
               {preview ? (
@@ -87,7 +87,7 @@ export function NewComplaint() {
                 <span className="text-sm font-medium text-slate-600">{dragging ? "Drop the photograph here" : "Drag & drop a photograph, or click to select"}</span>
                 <span className="mt-1 text-xs text-slate-400">The damage class, severity and priority are derived from this image</span></>
               )}
-              <input ref={inputRef} type="file" name="photo" accept="image/*" className="hidden" onChange={(e) => loadPreviewAndAttachFile(e.target.files?.[0])} />
+              <input ref={inputRef} type="file" name="photo" accept="image/*" className="hidden" onChange={(e) => handleFileSelect(e.target.files?.[0])} />
             </div>
           </div>
 

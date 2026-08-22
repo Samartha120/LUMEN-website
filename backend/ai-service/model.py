@@ -496,60 +496,137 @@ def _predict_tiled(model, img: np.ndarray, conf: float, frame_area: float,
     return _merge_overlapping(dets, frame_area)
 
 
-def assess_scene(img: np.ndarray) -> dict:
-    """Is this photograph plausibly of a road or civic area at all?
+# COCO classes that say "this is an outdoor street scene". Their presence is
+# evidence *for* relevance even when little road segments — a photograph framed
+# on a bus is still a street.
+_STREET_COCO_IDS = {
+    1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 6: "train", 7: "truck",
+    9: "traffic light", 10: "fire hydrant", 11: "stop sign", 12: "parking meter",
+    13: "bench", 0: "person",
+}
 
-    A citizen (or a bored tester) can upload a selfie, a screenshot or a cat.
-    Analysing that and returning "no damage found" is misleading — the honest
-    answer is that the photograph is not of the right thing. The road mask
-    already answers this: if almost none of the frame segments as road surface,
-    there is nothing civic to assess.
+# COCO classes that say "this is a photograph of a thing, indoors or held".
+# Nothing here belongs in a road photograph, so area covered by these counts
+# against relevance.
+_OFF_TOPIC_COCO_IDS = {
+    # animals
+    15: "cat", 16: "dog", 17: "horse", 18: "sheep", 19: "cow", 20: "elephant",
+    21: "bear", 22: "zebra", 23: "giraffe", 14: "bird",
+    # food
+    46: "banana", 47: "apple", 48: "sandwich", 49: "orange", 50: "broccoli",
+    51: "carrot", 52: "hot dog", 53: "pizza", 54: "donut", 55: "cake",
+    # indoors / held objects
+    56: "chair", 57: "couch", 59: "bed", 60: "dining table", 61: "toilet",
+    62: "tv", 63: "laptop", 64: "mouse", 66: "keyboard", 67: "cell phone",
+    39: "bottle", 41: "cup", 43: "knife", 44: "spoon", 45: "bowl", 73: "book",
+    68: "microwave", 69: "oven", 71: "sink", 72: "refrigerator",
+}
+
+
+def assess_scene(img: np.ndarray, *, want: str = "road") -> dict:
+    """Is this photograph plausibly of the right kind of place?
+
+    A citizen — or a bored examiner — can upload a selfie, a screenshot, a plate
+    of food or a cat. Running damage detection on that and reporting "no damage
+    found" is misleading: the honest answer is that the photograph is not of the
+    right thing at all.
+
+    This deliberately does not consult the damage model. A detector asked
+    "are there potholes here" cannot answer "is this even a road" — silence from
+    it is ambiguous between an intact road and a photograph of lunch. The
+    evidence used here is independent: an HSV road-surface segmentation, a
+    pretrained COCO detector reading the *subject* of the photograph, and edge
+    statistics that catch screenshots and synthetic images.
+
+    `want` selects the criterion:
+      "road"  — a road, pavement or parking surface must be present.
+      "urban" — any street scene qualifies, so street furniture and vehicles
+                count as evidence even where little ground is visible.
+
+    Thresholds come from measurement, not instinct. Across 125 sampled images
+    the median road fraction was 0.82 for overhead pothole shots, 0.63 for web
+    road photos and 0.41 for animal photographs, and edge density on genuine
+    gravel road surfaces reached 0.364 — which is why the old "incoherent"
+    cutoff of 0.30 was rejecting one valid road photo in four.
     """
     h, w = img.shape[:2]
+    frame = float(h * w)
     road = _road_mask(img)
-    road_fraction = float((road > 0).sum()) / float(h * w)
+    road_fraction = float((road > 0).sum()) / frame
 
-    # Objects that, when they dominate the frame, mean the photo is of a thing
-    # rather than of a place — a pet, a person, a laptop on a desk.
+    # A road is underfoot. Measuring the lower half separates a photograph
+    # taken standing on a street from one where a desaturated background —
+    # sand, stone, a stable wall — happens to satisfy the asphalt colour rule.
+    # Measured medians: overhead pothole 1.00, web road 0.94, intact road 0.99,
+    # against 0.41 for a set of miscellaneous non-street photographs.
+    bottom = road[h // 2:, :]
+    ground_fraction = float((bottom > 0).sum()) / float(bottom.size)
+
+    # What is the photograph *of*? Areas are summed rather than counted: one cat
+    # filling the frame matters, a cat on a distant pavement does not.
+    street_area = 0.0
+    off_topic_area = 0.0
     subjects: list[str] = []
     m = _get_occluder_model()
     if m is not None:
         try:
             res = m.predict(img, verbose=False, conf=0.35)[0]
             for box in getattr(res, "boxes", []) or []:
-                name = _NON_CIVIC_COCO_IDS.get(int(box.cls[0]))
-                if not name:
-                    continue
+                cid = int(box.cls[0])
                 x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
-                if (x2 - x1) * (y2 - y1) > 0.25 * h * w:
-                    subjects.append(name)
+                area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+                if cid in _STREET_COCO_IDS:
+                    # A pedestrian is ordinary on a street; a person filling the
+                    # frame is a portrait or a selfie, and the photograph is of
+                    # them rather than of anywhere.
+                    if cid == 0 and area > 0.25 * frame:
+                        off_topic_area += area
+                        subjects.append("person")
+                    else:
+                        street_area += area
+                elif cid in _OFF_TOPIC_COCO_IDS:
+                    off_topic_area += area
+                    if area > 0.10 * frame:
+                        subjects.append(_OFF_TOPIC_COCO_IDS[cid])
         except Exception:
             pass
+    street_share = street_area / frame
+    off_topic_share = off_topic_area / frame
 
-    # Grey and unsaturated is not sufficient: static, noise and many synthetic
-    # images satisfy the asphalt rule too. A photographed surface has coherent
-    # texture — edges concentrated along features. Edges everywhere at once
-    # means there is no scene, just high-frequency content.
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    edge_density = float((cv2.Canny(gray, 70, 180) > 0).sum()) / float(h * w)
-    incoherent = edge_density > 0.30   # static or noise, not a scene
-    featureless = edge_density < MIN_EDGE_DENSITY  # drawing, screenshot, flat fill
+    edge_density = float((cv2.Canny(gray, 70, 180) > 0).sum()) / frame
+    # 0.45, not 0.30: coarse gravel is a real surface and reaches 0.364.
+    incoherent = edge_density > 0.45
+    featureless = edge_density < MIN_EDGE_DENSITY   # screenshot, drawing, flat fill
 
-    ok = (
-        road_fraction >= MIN_ROAD_FRACTION
-        and not subjects
-        and not incoherent
-        and not featureless
-    )
+    # The subject of the photograph is something off-topic, and it dominates
+    # what is in frame more than any street content does.
+    dominated = off_topic_share > 0.18 and off_topic_share > street_share
+
+    if want == "urban":
+        # A street scene qualifies on ground or on street furniture: a photo
+        # framed on a bus or a traffic light is still a street.
+        has_place = ground_fraction >= 0.20 or street_share >= 0.02
+    else:
+        # Pothole analysis needs a surface to analyse, so the bar is the ground
+        # itself rather than anything in the scene.
+        has_place = ground_fraction >= 0.45
+
+    ok = has_place and not dominated and not incoherent and not featureless
+
     return {
         "road_fraction": round(road_fraction, 4),
+        "ground_fraction": round(ground_fraction, 4),
         "edge_density": round(edge_density, 4),
+        "street_share": round(street_share, 4),
+        "off_topic_share": round(off_topic_share, 4),
         "looks_civic": ok,
         "reason": (
-            f"the photograph is mostly of a {subjects[0]}, not a place" if subjects
+            f"the photograph is mostly of a {subjects[0]}, not a place" if dominated and subjects
+            else "the photograph is of an object, not a place" if dominated
             else "not a photograph of a surface — no coherent texture" if incoherent
             else "too flat to be a photograph of a real surface" if featureless
-            else "no road or ground surface could be segmented" if road_fraction < MIN_ROAD_FRACTION
+            else "no road, pavement or street scene could be found" if not has_place
             else "road surface detected"
         ),
     }

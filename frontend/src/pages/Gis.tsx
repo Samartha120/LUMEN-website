@@ -18,7 +18,7 @@ type E = {
   lat: number; lng: number; skills: string; openJobs: number;
   department: { name: string } | null;
 };
-type Landmark = { name: string; lat: number; lng: number; radiusM: number };
+type Landmark = { name: string; lat: number; lng: number; radiusM: number; risk?: number };
 
 const BAND: Record<string, string> = {
   SEVERE: "#ef4444", SIGNIFICANT: "#f59e0b", MODERATE: "#0ea5e9",
@@ -43,6 +43,39 @@ const engineerIcon = (openJobs: number) =>
       color:#fff;font:600 11px system-ui">${openJobs}</div>`,
   });
 
+const LANDMARK_GLYPH: Record<string, string> = {
+  Hospital: "H", School: "S", "Major highway": "M",
+};
+
+/**
+ * A landmark needs a permanent, readable label, not a hover tooltip.
+ *
+ * When a complaint's priority breakdown says "Near School +9", the reviewer's
+ * next move is to look for that school on the map. A faint dashed ring with the
+ * name hidden behind a hover reads as decoration, so the claim looks unverified.
+ * The name and the exact number of points it contributes are drawn on the map.
+ */
+const landmarkIcon = (name: string, risk?: number) =>
+  L.divIcon({
+    className: "",
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+    // The "+N" is dropped rather than rendered as "+undefined" when an older
+    // backend is still serving landmarks without their risk weighting.
+    html: `<div style="position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;
+      gap:5px;white-space:nowrap;background:#fff;border:1.5px solid #4f46e5;border-radius:999px;
+      padding:2px 8px 2px 3px;box-shadow:0 1px 5px rgba(0,0,0,.28)">
+      <span style="width:17px;height:17px;border-radius:50%;background:#4f46e5;color:#fff;
+        display:flex;align-items:center;justify-content:center;font:700 10px system-ui">${
+          LANDMARK_GLYPH[name] ?? "•"
+        }</span>
+      <span style="font:600 11px system-ui;color:#312e81">${name}</span>
+      ${typeof risk === "number"
+        ? `<span style="font:700 10px system-ui;color:#4f46e5">+${risk}</span>`
+        : ""}
+    </div>`,
+  });
+
 /**
  * Frame the map on the data rather than a fixed zoom.
  *
@@ -53,15 +86,52 @@ const engineerIcon = (openJobs: number) =>
  */
 function FitToData({ points }: { points: [number, number][] }) {
   const map = useMap();
+
   useEffect(() => {
-    map.invalidateSize();
-    if (points.length === 0) return;
-    map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 15 });
+    const fit = () => {
+      map.invalidateSize();
+      if (points.length > 0) {
+        map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 15 });
+      }
+    };
+
+    // A single invalidateSize on mount is not enough. Leaflet builds its tile
+    // grid from the container's measured width, and inside a flex card that
+    // width is not final on the first paint — so it requested tiles for a
+    // narrow strip and left the rest of the map grey and empty, which is
+    // exactly where the landmarks happened to be. Re-measuring on the next
+    // frame, once layout has settled, fills the whole viewport.
+    fit();
+    const raf = requestAnimationFrame(fit);
+
+    // And keep it correct afterwards: collapsing the sidebar or resizing the
+    // window changes the container without remounting the map.
+    const box = map.getContainer();
+    const observer = new ResizeObserver(() => map.invalidateSize());
+    observer.observe(box);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
   }, [map, points]);
+
   return null;
 }
 
 const hoursOld = (iso: string) => (Date.now() - new Date(iso).getTime()) / 3_600_000;
+
+/** Same haversine the backend scores with, so the counts shown agree with it. */
+function metresBetween(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const R = 6_371_000;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(lat2 - lat1);
+  const dLng = rad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
 
 /**
  * GIS Map — every open complaint on the real street map.
@@ -82,11 +152,15 @@ export function Gis() {
     [data, band],
   );
 
-  // Frame on everything that has a position, complaints and engineers alike.
+  // Frame on everything that has a position — complaints, engineers and the
+  // landmarks. Landmarks are included so a priority-raising place can never end
+  // up outside the framed area, which would leave "Near School +9" pointing at
+  // something off screen.
   const fitPoints = useMemo<[number, number][]>(
     () => [
       ...(data?.complaints ?? []).map((c) => [c.lat, c.lng] as [number, number]),
       ...(data?.engineers ?? []).map((e) => [e.lat, e.lng] as [number, number]),
+      ...(data?.landmarks ?? []).map((l) => [l.lat, l.lng] as [number, number]),
     ],
     [data],
   );
@@ -143,16 +217,48 @@ export function Gis() {
               </LayersControl.BaseLayer>
             </LayersControl>
 
-            {/* The landmark radii the priority rule actually scores against. */}
+            {/* The landmark radii the priority rule actually scores against.
+                Drawn solidly enough to read over street tiles — at city zoom a
+                500 m ring is barely 60 px across, and the previous 1 px dashed
+                outline at 6% fill was invisible against the map. */}
             {landmarks.map((l) => (
               <Circle
                 key={l.name}
                 center={[l.lat, l.lng]}
                 radius={l.radiusM}
-                pathOptions={{ color: "#6366f1", weight: 1, fillColor: "#6366f1", fillOpacity: 0.06, dashArray: "4 4" }}
+                pathOptions={{ color: "#4f46e5", weight: 2.5, fillColor: "#6366f1", fillOpacity: 0.16, dashArray: "6 4" }}
               >
-                <Tooltip>{l.name} · complaints within {l.radiusM} m score higher</Tooltip>
+                <Tooltip>
+                  {l.name} · a complaint within {l.radiusM} m scores
+                  {typeof l.risk === "number" ? ` +${l.risk}` : " higher"} on priority
+                </Tooltip>
               </Circle>
+            ))}
+
+            {/* Named on the map rather than on hover, so "Near School +9" in a
+                complaint's priority breakdown can be checked by eye. */}
+            {landmarks.map((l) => (
+              <Marker
+                key={`${l.name}-label`}
+                position={[l.lat, l.lng]}
+                icon={landmarkIcon(l.name, l.risk)}
+                zIndexOffset={500}
+              >
+                <Popup>
+                  <div className="min-w-[190px] text-xs">
+                    <p className="font-semibold text-slate-900">{l.name}</p>
+                    <p className="mt-1 text-slate-600">
+                      Any open complaint within <b>{l.radiusM} m</b> of here
+                      {typeof l.risk === "number" ? <> gains <b>+{l.risk}</b> on</> : " gains a boost to"}{" "}
+                      its priority score.
+                    </p>
+                    <p className="mt-1.5 text-slate-500">
+                      {shown.filter((c) => metresBetween(c.lat, c.lng, l.lat, l.lng) <= l.radiusM).length}{" "}
+                      of the complaints shown are inside this radius.
+                    </p>
+                  </div>
+                </Popup>
+              </Marker>
             ))}
 
             {shown.map((c) => {
@@ -231,7 +337,8 @@ export function Gis() {
             <span className="h-2.5 w-2.5 rounded-full border-2 border-red-900" /> Past SLA
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full border border-dashed border-indigo-400 bg-indigo-50" /> Landmark radius
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-600 text-[8px] font-bold text-white">S</span>
+            Landmark · complaints within 500 m score higher
           </span>
           <span className="text-slate-400">Marker radius ∝ severity score</span>
         </div>

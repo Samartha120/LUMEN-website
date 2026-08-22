@@ -8,11 +8,16 @@ import { computeAssignmentPlan } from "../lib/assignment.js";
 const router = Router();
 const OPEN = ["SUBMITTED", "ASSIGNED", "IN_PROGRESS", "PENDING_REVIEW"];
 
-/** Mirrors lib/priority.ts — the places that raise a complaint's priority. */
+/**
+ * Mirrors SENSITIVE_LOCATIONS in lib/priority.ts — the places that raise a
+ * complaint's priority. `risk` is the number of points each one adds, so the
+ * map can show the same "+12" the complaint's priority breakdown claims.
+ * The 500 m radius is the threshold priority.ts scores against.
+ */
 const LANDMARKS = [
-  { name: "Hospital", lat: 12.9719, lng: 77.5937, radiusM: 500 },
-  { name: "School", lat: 12.9352, lng: 77.6245, radiusM: 500 },
-  { name: "Major highway", lat: 12.957, lng: 77.639, radiusM: 500 },
+  { name: "Hospital", lat: 12.9719, lng: 77.5937, radiusM: 500, risk: 12 },
+  { name: "School", lat: 12.9352, lng: 77.6245, radiusM: 500, risk: 9 },
+  { name: "Major highway", lat: 12.957, lng: 77.639, radiusM: 500, risk: 10 },
 ];
 
 router.get("/health", async (_req, res) => {

@@ -72,9 +72,60 @@ _NON_CIVIC_COCO_IDS = {
     59: "bed", 60: "dining table", 39: "bottle", 41: "cup", 73: "book",
 }
 
+# Confidence a detection must reach to be shown at all.
+#
+# Chosen by measurement, not by feel. Swept against the held-out close-up road
+# photos — the kind of image a citizen actually uploads — on the current
+# civic_best.pt weights:
+#
+#     conf   boxes drawn   correct   precision   recall
+#     0.25        --          --       ~0.83       ~0.50      (previous default)
+#     0.30        30          25        0.833       0.500
+#     0.40        27          22        0.815       0.440
+#     0.50        20          18        0.900       0.360
+#     0.60        15          15        1.000       0.300
+#
+# 0.50 is the point where nine in ten drawn boxes are real. The trade is recall:
+# roughly a third of potholes are found rather than half. For a complaint
+# system that is the right way round — a false detection dispatches an engineer
+# to a road that is fine, while a missed pothole is reported by the next person
+# who walks past it.
+#
+# Sample was 23 images / 50 potholes, so 0.900 is 18 of 20 boxes and the true
+# figure could sit anywhere from roughly 0.77 to 0.97. Re-measure once there is
+# a larger held-out set of app-domain photos.
+DEFAULT_CONF = 0.50
+
 # Detections recovered from the tiled fallback must clear this to be reported.
 # Higher than the normal threshold on purpose: see the note where it is used.
-TILED_MIN_CONF = 0.35
+# A tile is a crop with no surrounding context, so it is the likelier source of
+# a false box and has to clear a correspondingly higher bar.
+#
+# Swept end-to-end: recall is flat at 0.400 from 0.55 through 0.75, so the bar
+# can be raised without giving anything up. 0.70 removes one false box and 0.75
+# removes none, hence 0.70. Be clear-eyed that "removes one false box" on a
+# 23-image sample is not a demonstrated gain — it is the reason this number is
+# not tuned any finer.
+TILED_MIN_CONF = 0.70
+
+# The two recall-recovery paths, both off by default because both cost more
+# precision than they return. Measured end-to-end through detect() on the
+# held-out close-up photos (23 images, 50 real potholes):
+#
+#     configuration                        boxes  correct  precision  recall
+#     both on (previous behaviour)            38       24      0.632   0.480
+#     tiles on, classical off                 27       23      0.852   0.460
+#     both off                                20       18      0.900   0.360
+#
+# The classical fallback is the clear defect: it contributed 11 boxes for 1
+# real pothole. The augmenting tiled pass is a genuine trade — it buys 0.10
+# recall for 0.05 precision, which is worth having in a triage queue but not
+# where a drawn box must be trustworthy.
+#
+# Set either to "1" to re-enable. Turn tiles back on first if recall matters
+# more than the ninth correct box in ten.
+USE_AUGMENTING_TILES = os.environ.get("LUMEN_AUGMENTING_TILES", "0") == "1"
+USE_CLASSICAL_FALLBACK = os.environ.get("LUMEN_CLASSICAL_FALLBACK", "0") == "1"
 
 # Detector selection when no fine-tuned weights are present:
 #   heuristic (default) - classical-CV road-damage localisation (see below)
@@ -395,7 +446,7 @@ def assess_scene(img: np.ndarray) -> dict:
     }
 
 
-def detect(data: bytes, conf: float = 0.25) -> dict:
+def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
     """Run detection and return structured results plus an annotated image."""
     img = _read_image(data)
     h, w = img.shape[:2]
@@ -421,13 +472,14 @@ def detect(data: bytes, conf: float = 0.25) -> dict:
         # a road with no garbage in it. So tiled results are admitted only for
         # the civic category the whole-frame pass already established — a tile
         # may add another pothole to a road scene, never a new category.
-        if dets:
+        if dets and USE_AUGMENTING_TILES:
             established = TAX.category_of(
                 max(dets, key=lambda d: d.confidence).label
             )
             extra = [
                 d for d in _predict_tiled(model, img, conf, frame_area, grid=(4, 3))
                 if TAX.category_of(d.label) == established
+                and d.confidence >= TILED_MIN_CONF
             ]
             if extra:
                 merged = _merge_overlapping(dets + extra, frame_area)
@@ -461,16 +513,19 @@ def detect(data: bytes, conf: float = 0.25) -> dict:
             if dets:
                 detector = "TRAINED+TILED"
 
-        # Last resort: the classical detector. A learned model only recognises
-        # what resembles its training set, and this one was trained on
-        # dashcam-style road photography — it returns nothing at all on, for
-        # example, a close bright shot of a road crazed edge to edge, because
-        # there is no bounded object to find, only texture. The geometric
-        # detector has no such blind spot: it measures darkness and edge
-        # density, so it still localises the damage. It is less precise, hence
-        # its position last, but reporting a lower-confidence region beats
-        # reporting nothing on a photograph that plainly shows damage.
-        if not dets:
+        # Last resort: the classical detector, only when explicitly enabled.
+        #
+        # The argument for it was that reporting a lower-confidence region beats
+        # reporting nothing on a photograph that plainly shows damage. Measured
+        # on the held-out close-up photos, that argument does not survive: the
+        # fallback contributed 11 boxes and 1 of them was a real pothole. It
+        # fires precisely when the model is least sure there is anything there,
+        # and a dark patch of shadow or a wet tarmac stain reads to it exactly
+        # like a pothole.
+        #
+        # "No damage detected — manual triage required" is a correct answer.
+        # A confident box on a shadow is not, and it costs an engineer a trip.
+        if not dets and USE_CLASSICAL_FALLBACK:
             fallback = heuristic_detect(img)
             if fallback:
                 dets = fallback

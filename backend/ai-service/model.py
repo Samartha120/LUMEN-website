@@ -85,6 +85,9 @@ _NON_CIVIC_COCO_IDS = {
 #     0.50        20          18        0.900       0.360
 #     0.60        15          15        1.000       0.300
 #
+# End-to-end through detect(), which also merges overlapping boxes, 0.50 gives
+# 21 boxes / 20 correct — precision 0.952 at recall 0.400.
+#
 # 0.50 is the point where nine in ten drawn boxes are real. The trade is recall:
 # roughly a third of potholes are found rather than half. For a complaint
 # system that is the right way round — a false detection dispatches an engineer
@@ -115,7 +118,7 @@ TILED_MIN_CONF = 0.70
 #     configuration                        boxes  correct  precision  recall
 #     both on (previous behaviour)            38       24      0.632   0.480
 #     tiles on, classical off                 27       23      0.852   0.460
-#     both off                                20       18      0.900   0.360
+#     both off                                21       20      0.952   0.400
 #
 # The classical fallback is the clear defect: it contributed 11 boxes for 1
 # real pothole. The augmenting tiled pass is a genuine trade — it buys 0.10
@@ -458,7 +461,12 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
         dets = heuristic_detect(img)
     else:
         model, _ = get_model()
-        dets = _predict(model, img, conf, frame_area)
+        # _predict returns raw YOLO boxes. A single large pothole routinely
+        # comes back as two or three stacked boxes, which reads as several
+        # potholes and makes the annotated image useless as evidence. Merge
+        # before anything else looks at them — this used to happen only inside
+        # the tiled branch below, so the plain whole-frame path never got it.
+        dets = _merge_overlapping(_predict(model, img, conf, frame_area), frame_area)
 
         # A whole-frame pass reliably finds the nearest, largest defect and
         # routinely misses the smaller ones further up the road — they occupy

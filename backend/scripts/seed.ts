@@ -124,6 +124,28 @@ const STATUSES = ["SUBMITTED", "SUBMITTED", "ASSIGNED", "ASSIGNED", "IN_PROGRESS
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000);
 const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
 
+/**
+ * Photographs fit to stand as complaint evidence, preferring `valid` over
+ * `train`.
+ *
+ * Roboflow applies mosaic augmentation when exporting a training split: four
+ * unrelated photographs stitched into one 640x640 tile and speckled with noise.
+ * Excellent for training, nonsense as evidence — a supervisor opening CMP-10296
+ * saw a montage of four different roads with a detection sprawled across 46% of
+ * it. Validation splits are untouched originals: one road, one photograph.
+ *
+ * Not every source ships a validation split (the manhole set is train-only),
+ * and that source was never mosaicked, so falling back to `train` is safe where
+ * `valid` is absent.
+ */
+function cleanImages(source: string, limit: number): string[] {
+  for (const split of ["valid", "val", "train"]) {
+    const found = imagesFrom(`${source}/${split}/images`, limit);
+    if (found.length > 0) return found;
+  }
+  return [];
+}
+
 function imagesFrom(rel: string, limit: number): string[] {
   const p = path.join(SOURCES, rel);
   if (!existsSync(p)) return [];
@@ -227,12 +249,20 @@ async function main() {
   // Imagery from every category the trained model can actually recognise.
   // Round-robin rather than concatenated, so the queue interleaves categories
   // instead of showing 30 potholes followed by 30 garbage piles.
+  // Seeded from the `valid` splits, not `train`.
+  //
+  // Roboflow applies mosaic augmentation when it exports a training split: four
+  // unrelated photographs stitched into one 640x640 tile and speckled with
+  // noise. Those are fine for training and nonsense as complaint evidence — a
+  // supervisor opening CMP-10296 saw a montage of four different roads with one
+  // box sprawled across 46% of it. Validation splits are untouched originals:
+  // one road, one photograph.
   const pools = [
-    imagesFrom("roads/potholes/train/images", 40),
-    imagesFrom("roads/cracks/train/images", 60),
-    imagesFrom("waste/garbage/train/images", 60),
-    imagesFrom("water/manholes/train/images", 60),
-    imagesFrom("waste/binoverflow/train/images", 40),
+    cleanImages("roads/potholes", 40),
+    cleanImages("roads/cracks", 60),
+    cleanImages("waste/garbage", 60),
+    cleanImages("water/manholes", 60),
+    cleanImages("waste/binoverflow", 40),
   ].filter((p) => p.length > 0);
 
   const candidates: string[] = [];

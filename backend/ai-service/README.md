@@ -47,7 +47,7 @@ curl -L -o weights/pothole_specialist.pt \
 It is a single-class YOLOv8n-seg pothole model by Farzad Nekouei, MIT licensed.
 `detect()` consults it only when the multi-class model finds nothing at all,
 because that model spends its capacity across five classes and misses potholes
-shot from unusual angles. Measured on the held-out close-up photos:
+shot from unusual angles.
 
 Measured on 60 labelled photos from an unrelated Roboflow project — the honest
 proxy for a picture pulled off Google, since our own pothole source shares its

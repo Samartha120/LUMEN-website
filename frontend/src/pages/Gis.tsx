@@ -90,9 +90,22 @@ function FitToData({ points }: { points: [number, number][] }) {
   useEffect(() => {
     const fit = () => {
       map.invalidateSize();
-      if (points.length > 0) {
-        map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 15 });
-      }
+      if (points.length === 0) return;
+
+      // A little slack around the data so edge markers are not flush against
+      // the frame, then lock the map inside it.
+      const bounds = L.latLngBounds(points).pad(0.12);
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+
+      // Confine panning to the city the complaints are actually in. Without
+      // this the map is the whole world: pan far enough and you are looking at
+      // an empty continent with no way back except reloading.
+      map.setMaxBounds(bounds);
+
+      // And stop the zoom-out at the framed view. The floor is taken from the
+      // zoom fitBounds just chose, so it always tracks the data rather than a
+      // hardcoded level that would be wrong the moment the complaints move.
+      map.setMinZoom(map.getZoom());
     };
 
     // A single invalidateSize on mount is not enough. Leaflet builds its tile
@@ -200,7 +213,19 @@ export function Gis() {
         </div>
 
         <div className="overflow-hidden rounded-lg border border-slate-200">
-          <MapContainer center={CENTRE} zoom={12} scrollWheelZoom style={{ height: 560, width: "100%" }}>
+          {/* No +/- control: the map opens framed on the data and is locked to
+              it, so the buttons only offered ways to end up somewhere useless.
+              Scroll and pinch still zoom, between the fitted floor and 18.
+              maxBoundsViscosity 1 makes the edge solid rather than springy. */}
+          <MapContainer
+            center={CENTRE}
+            zoom={12}
+            scrollWheelZoom
+            zoomControl={false}
+            maxBoundsViscosity={1}
+            maxZoom={18}
+            style={{ height: 560, width: "100%" }}
+          >
             <FitToData points={fitPoints} />
             <LayersControl position="topright">
               <LayersControl.BaseLayer checked name="Street">

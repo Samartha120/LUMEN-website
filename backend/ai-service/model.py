@@ -1042,7 +1042,7 @@ def _annotate(img: np.ndarray, dets: list[Detection]) -> np.ndarray:
             wash = out.copy()
             cv2.fillPoly(wash, [pts], colour)
             cv2.addWeighted(wash, 0.25, out, 0.75, 0, out)
-            cv2.polylines(out, [pts], True, colour, 3, lineType=cv2.LINE_AA)
+            cv2.polylines(out, [pts], True, colour, 4, lineType=cv2.LINE_AA)
         else:
             cv2.rectangle(out, (x1, y1), (x2, y2), colour, 3)
 

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 # category -> (department code, department name, resolution SLA hours)
 CATEGORIES: dict[str, dict] = {
-    "ROADS":  {"dept": "RDS", "dept_name": "Roads & Infrastructure", "sla": 48, "colour": (0, 0, 220)},
+    "ROADS":  {"dept": "RDS", "dept_name": "Roads & Infrastructure", "sla": 48, "colour": (0, 0, 255)},
     "WASTE":  {"dept": "SAN", "dept_name": "Sanitation",             "sla": 24, "colour": (60, 180, 75)},
     "WATER":  {"dept": "WTR", "dept_name": "Water Supply",           "sla": 24, "colour": (220, 120, 0)},
 }

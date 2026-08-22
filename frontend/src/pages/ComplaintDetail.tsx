@@ -13,7 +13,11 @@ import { Card } from "../components/ui";
 import { StatusBadge, PriorityBadge, SeverityMeter, ModelModeBadge } from "../components/badges";
 import { CategoryBadge } from "../components/CategoryBadge";
 
-type Det = { label: string; confidence: number; box: number[]; area_ratio: number };
+type Det = {
+  label: string; confidence: number; box: number[]; area_ratio: number;
+  /** Segmentation outline in image pixels; absent for box-only detections. */
+  polygon?: number[][] | null;
+};
 type Img = { id: string; kind: string; path: string; annotated: string | null; severity: number | null };
 type Ev = { id: string; type: string; message: string; actor: string; createdAt: string };
 type Complaint = {
@@ -104,6 +108,10 @@ export function ComplaintDetail() {
   if (!data) return <p className="text-slate-400">{loading ? "Loading…" : "Not found."}</p>;
   const c = data.complaint;
   const dets: Det[] = c.detections ? JSON.parse(c.detections) : [];
+  const potholeCount = dets.filter((d) => d.label === "Pothole").length;
+  // How many carry a real outline rather than a rectangle — the segmentation
+  // model supplies masks, the multi-class detector does not.
+  const segCount = dets.filter((d) => d.label === "Pothole" && d.polygon?.length).length;
   const citizenImgs = c.images.filter((i) => i.kind === "CITIZEN");
   // Which angle the viewer is looking at; defaults to the primary (first).
   const shown = citizenImgs.find((i) => i.id === shownId) ?? citizenImgs[0];
@@ -158,8 +166,28 @@ export function ComplaintDetail() {
               <>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div><p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Original</p><img src={shown.path} alt="Reported" className="w-full rounded-lg border border-slate-200 object-cover" /></div>
-                  <div><p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Model output</p>
+                  <div>
+                    <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Model output</p>
+                      {shown.annotated && (
+                        // The overlay is the evidence a supervisor attaches to a
+                        // work order, so it has to leave the browser.
+                        <a
+                          href={shown.annotated}
+                          download={`${data.complaint.ref}-detections.png`}
+                          className="text-[11px] font-medium text-brand-700 underline hover:text-brand-800"
+                        >
+                          Download
+                        </a>
+                      )}
+                    </div>
                     {shown.annotated ? <img src={shown.annotated} alt="Detections" className="w-full rounded-lg border border-slate-200 object-cover" /> : <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-300 text-xs text-slate-400">No annotated image</div>}
+                    {potholeCount > 0 && (
+                      <p className="mt-1.5 text-xs text-slate-500">
+                        <b className="text-slate-800">{potholeCount}</b> pothole{potholeCount === 1 ? "" : "s"} outlined
+                        {segCount > 0 && ` · ${segCount} with a segmentation mask`}
+                      </p>
+                    )}
                   </div>
                 </div>
 

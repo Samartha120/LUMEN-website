@@ -245,8 +245,13 @@ def _specialist_potholes(img: np.ndarray, frame_area: float) -> list["Detection"
         res = m.predict(img, conf=SPECIALIST_MIN_CONF, verbose=False)[0]
     except Exception:
         return []
+    # Ultralytics returns masks already scaled to the original frame, so the
+    # polygons need no remapping — but only a segmentation checkpoint has them.
+    masks = getattr(res, "masks", None)
+    polys = list(masks.xy) if masks is not None else []
+
     out: list[Detection] = []
-    for b in getattr(res, "boxes", []) or []:
+    for i, b in enumerate(getattr(res, "boxes", []) or []):
         name = res.names.get(int(b.cls[0]), "")
         # Single-class by construction, but check rather than assume: a swapped
         # checkpoint must not be able to inject some other label.
@@ -254,13 +259,20 @@ def _specialist_potholes(img: np.ndarray, frame_area: float) -> list["Detection"
             continue
         x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
         area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        poly = None
+        if i < len(polys) and len(polys[i]) >= 3:
+            poly = [[round(float(x), 1), round(float(y), 1)] for x, y in polys[i]]
         out.append(Detection(
             label="Pothole",
             confidence=round(float(b.conf[0]), 4),
             box=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
             area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
+            polygon=poly,
         ))
-    return _merge_overlapping(out, frame_area)
+    # Merging unions boxes and cannot union polygons, so it would silently drop
+    # the outlines. The specialist is single-class and already NMS'd, so its
+    # boxes rarely overlap — keep the masks instead.
+    return out
 
 
 def _get_occluder_model():
@@ -319,6 +331,12 @@ class Detection:
     confidence: float
     box: list[float]      # [x1, y1, x2, y2] in pixels
     area_ratio: float     # box area / image area
+    # Segmentation outline in full-frame pixels, [[x, y], ...], when the model
+    # that produced this detection was a segmentation model. A pothole is an
+    # irregular blob, so a rectangle both looks crude and overstates its plan
+    # area — which then propagates into the volume and the cost estimate.
+    # Detection-only models leave this empty and are drawn as boxes.
+    polygon: list[list[float]] | None = None
 
 
 def _read_image(data: bytes) -> np.ndarray:
@@ -918,12 +936,39 @@ def heuristic_detect(img: np.ndarray) -> list["Detection"]:
 
 
 def _annotate(img: np.ndarray, dets: list[Detection]) -> np.ndarray:
+    """Overlay detections on a copy of the uploaded image.
+
+    The original pixels are never altered — everything is drawn onto a copy, so
+    the photograph the citizen submitted stays the evidence of record and the
+    overlay is only a reading of it.
+
+    Where a segmentation mask exists the outline follows the damage; otherwise
+    a box is drawn. Potholes are numbered POTHOLE 1, 2, 3 in the order they are
+    reported, which is by size, so the numbering matches the table beneath.
+    """
     out = img.copy()
+    pothole_n = 0
     for d in dets:
         x1, y1, x2, y2 = [int(v) for v in d.box]
         colour = TAX.colour_of(d.label)          # one colour per civic category
-        cv2.rectangle(out, (x1, y1), (x2, y2), colour, 3)
-        tag = f"{d.label} {d.confidence:.2f}"
+
+        if d.label == "Pothole":
+            pothole_n += 1
+            tag = f"POTHOLE {pothole_n}  {d.confidence:.2f}"
+        else:
+            tag = f"{d.label} {d.confidence:.2f}"
+
+        if d.polygon and len(d.polygon) >= 3:
+            pts = np.array(d.polygon, dtype=np.int32).reshape(-1, 1, 2)
+            # A translucent wash makes the extent readable without hiding the
+            # road surface underneath, which is what a supervisor is judging.
+            wash = out.copy()
+            cv2.fillPoly(wash, [pts], colour)
+            cv2.addWeighted(wash, 0.25, out, 0.75, 0, out)
+            cv2.polylines(out, [pts], True, colour, 3, lineType=cv2.LINE_AA)
+        else:
+            cv2.rectangle(out, (x1, y1), (x2, y2), colour, 3)
+
         (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         cv2.rectangle(out, (x1, max(0, y1 - th - 10)), (x1 + tw + 8, y1), colour, -1)
         cv2.putText(out, tag, (x1 + 4, max(12, y1 - 6)),

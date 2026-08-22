@@ -32,6 +32,15 @@ const BAND: Record<string, string> = {
 const CENTRE: [number, number] = [12.9716, 77.5946];
 
 /**
+ * How long a complaint counts as new, and the colour that says so.
+ *
+ * Magenta because nothing else on the map uses it — severity owns red through
+ * slate, engineers own emerald, and the landmark badges own the rest.
+ */
+const NEW_FOR_HOURS = 24;
+const NEW_COLOUR = "#db2777";
+
+/**
  * Leaflet ships its marker icons as separate image files resolved by relative
  * URL, which a bundler rewrites and breaks. Engineers are drawn as an inline
  * SVG pin instead, so nothing has to be fetched.
@@ -357,15 +366,36 @@ export function Gis() {
             {shown.map((c) => {
               const sev = c.severityScore ?? 0;
               const colour = BAND[c.severityBand ?? "NONE"];
-              const overdue = hoursOld(c.createdAt) > (c.slaHours ?? 48);
+              const age = hoursOld(c.createdAt);
+              const overdue = age > (c.slaHours ?? 48);
+              const isNew = age < NEW_FOR_HOURS;
               return (
+                <Fragment key={c.id}>
+                  {/* Anything reported in the last 24 hours wears a magenta halo
+                      so it stands out of a queue of seventy, then drops back to
+                      looking like every other complaint once the day is out.
+                      The halo sits outside the marker rather than replacing its
+                      fill, because the fill is the severity and that is the more
+                      important thing to keep readable. */}
+                  {isNew && !overdue && (
+                    <CircleMarker
+                      center={[c.lat, c.lng]}
+                      radius={5 + (sev / 100) * 9 + 5}
+                      interactive={false}
+                      pathOptions={{
+                        color: NEW_COLOUR, weight: 2,
+                        fillColor: NEW_COLOUR, fillOpacity: 0.15,
+                      }}
+                    />
+                  )}
                 <CircleMarker
-                  key={c.id}
                   center={[c.lat, c.lng]}
                   radius={5 + (sev / 100) * 9}
                   pathOptions={{
-                    color: overdue ? "#7f1d1d" : "#ffffff",
-                    weight: overdue ? 2.5 : 1.5,
+                    // Past its SLA outranks new: a complaint that is both is
+                    // already late, and late is the thing to act on.
+                    color: overdue ? "#7f1d1d" : isNew ? NEW_COLOUR : "#ffffff",
+                    weight: overdue || isNew ? 2.5 : 1.5,
                     fillColor: colour,
                     fillOpacity: 0.85,
                   }}
@@ -386,10 +416,16 @@ export function Gis() {
                           <tr><td className="pr-2">Engineer</td><td className="font-medium text-slate-800">{c.engineer ? `${c.engineer.name} (${c.engineer.code})` : "Unassigned"}</td></tr>
                         </tbody>
                       </table>
+                      {isNew && !overdue && (
+                        <p className="mt-1.5 font-semibold" style={{ color: NEW_COLOUR }}>
+                          New · reported {age < 1 ? "under an hour" : `${Math.floor(age)} h`} ago
+                        </p>
+                      )}
                       {overdue && <p className="mt-1.5 font-semibold text-red-700">Past its {c.slaHours ?? 48} h SLA</p>}
                     </div>
                   </Popup>
                 </CircleMarker>
+                </Fragment>
               );
             })}
 
@@ -425,6 +461,13 @@ export function Gis() {
           <span className="inline-flex items-center gap-1.5">
             <span className="flex h-4 w-4 items-center justify-center rounded-sm border-2 border-white bg-emerald-500 text-[8px] font-bold text-white shadow">n</span>
             Engineer, showing open jobs
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="h-3 w-3 rounded-full border-2"
+              style={{ borderColor: NEW_COLOUR, background: `${NEW_COLOUR}26` }}
+            />
+            New · last {NEW_FOR_HOURS} h
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-full border-2 border-red-900" /> Past SLA

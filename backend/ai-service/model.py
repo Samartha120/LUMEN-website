@@ -33,6 +33,33 @@ TRAINED_WEIGHTS = WEIGHTS_DIR / "civic_best.pt"
 LEGACY_WEIGHTS = WEIGHTS_DIR / "rdd_best.pt"
 FALLBACK_WEIGHTS = "yolo11n.pt"
 
+# A pothole-only second opinion, asked only when the multi-class model finds
+# nothing at all.
+#
+# YOLOv8n-seg trained on the Pothole Image Segmentation dataset by Farzad
+# Nekouei, MIT licensed:
+#   https://github.com/FarzadNekouee/YOLOv8_Pothole_Segmentation_Road_Damage_Assessment
+#
+# It exists because our model, trained across five civic classes, has to spend
+# its capacity broadly and misses potholes shot from unusual angles. A citizen's
+# photograph of a flooded, crumbling road edge scored 0.012 with ours and 0.885
+# with this one. On the held-out close-up photos, consulting it only where ours
+# is silent improves both numbers at once, which a threshold change never does:
+#
+#     configuration                  shows  correct  precision  recall
+#     ours alone                        13       15      0.938   0.300
+#     ours, else specialist @0.70       17       21      0.955   0.420
+#
+# The bar is 0.70 rather than 0.50 because this runs precisely when the primary
+# model saw nothing, so the prior is already against there being damage.
+#
+# It replaces the classical fallback that used to fill this slot and put a 0.61
+# confidence box on a puddle. Single-class, so it can only ever add potholes —
+# it cannot invent a garbage pile or misroute a complaint to another department.
+SPECIALIST_WEIGHTS = WEIGHTS_DIR / "pothole_specialist.pt"
+SPECIALIST_MIN_CONF = 0.70
+USE_POTHOLE_SPECIALIST = os.environ.get("LUMEN_POTHOLE_SPECIALIST", "1") == "1"
+
 # Raw model label -> taxonomy label (RDD2022 codes etc.)
 RDD_CLASSES = TAX.RDD_ALIASES
 CLASS_SEVERITY_WEIGHT = {name: e["weight"] for name, e in TAX.CLASSES.items()}
@@ -173,6 +200,53 @@ def get_model():
     weights = _trained_weights_path()
     _model = YOLO(str(weights)) if mode == "TRAINED" and weights else YOLO(FALLBACK_WEIGHTS)
     return _model, _mode
+
+
+_specialist = None
+_specialist_failed = False
+
+
+def _get_specialist():
+    """The pothole-only model, loaded lazily and never fatal if missing."""
+    global _specialist, _specialist_failed
+    if _specialist is not None or _specialist_failed:
+        return _specialist
+    if not (USE_POTHOLE_SPECIALIST and SPECIALIST_WEIGHTS.exists()):
+        _specialist_failed = True
+        return None
+    try:
+        from ultralytics import YOLO
+        _specialist = YOLO(str(SPECIALIST_WEIGHTS))
+    except Exception:
+        _specialist_failed = True
+    return _specialist
+
+
+def _specialist_potholes(img: np.ndarray, frame_area: float) -> list["Detection"]:
+    """Ask the specialist for potholes. Returns [] on any failure."""
+    m = _get_specialist()
+    if m is None:
+        return []
+    try:
+        res = m.predict(img, conf=SPECIALIST_MIN_CONF, verbose=False)[0]
+    except Exception:
+        return []
+    out: list[Detection] = []
+    for b in getattr(res, "boxes", []) or []:
+        name = res.names.get(int(b.cls[0]), "")
+        # Single-class by construction, but check rather than assume: a swapped
+        # checkpoint must not be able to inject some other label.
+        if "pothole" not in name.lower():
+            continue
+        x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        out.append(Detection(
+            label="Pothole",
+            confidence=round(float(b.conf[0]), 4),
+            box=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+            area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
+        ))
+    return _merge_overlapping(out, frame_area)
 
 
 def _get_occluder_model():
@@ -520,6 +594,15 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
                     if d.confidence >= TILED_MIN_CONF]
             if dets:
                 detector = "TRAINED+TILED"
+
+        # Nothing found across the whole frame or the tiles. Before giving up,
+        # ask the pothole specialist — see SPECIALIST_WEIGHTS above for why this
+        # is worth a second inference and why its bar is higher.
+        if not dets:
+            special = _specialist_potholes(img, frame_area)
+            if special:
+                dets = special
+                detector = "TRAINED+SPECIALIST"
 
         # Last resort: the classical detector, only when explicitly enabled.
         #

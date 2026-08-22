@@ -33,6 +33,31 @@ The service reports `model_mode` on every response:
   the pipeline runs end-to-end. **Detections are generic objects, not road
   damage.** Train to get real results.
 
+## The pothole specialist
+
+`weights/` is gitignored, so a fresh clone has no model files. The multi-class
+detector comes from training (below). The pothole specialist is a third-party
+checkpoint and has to be fetched:
+
+```bash
+curl -L -o weights/pothole_specialist.pt \
+  https://raw.githubusercontent.com/FarzadNekouee/YOLOv8_Pothole_Segmentation_Road_Damage_Assessment/HEAD/model/best.pt
+```
+
+It is a single-class YOLOv8n-seg pothole model by Farzad Nekouei, MIT licensed.
+`detect()` consults it only when the multi-class model finds nothing at all,
+because that model spends its capacity across five classes and misses potholes
+shot from unusual angles. Measured on the held-out close-up photos:
+
+| configuration | shows a box | correct | precision | recall |
+| --- | --- | --- | --- | --- |
+| specialist off | 18/23 | 20 | 0.952 | 0.400 |
+| specialist on | 19/23 | 21 | 0.955 | 0.420 |
+
+Without the file the service still runs — the specialist is skipped silently
+and detection falls back to the multi-class model alone. Set
+`LUMEN_POTHOLE_SPECIALIST=0` to disable it even when present.
+
 ## Training on RDD2022
 
 RDD2022 is the multi-national road damage dataset (47,420 images, 55,000+

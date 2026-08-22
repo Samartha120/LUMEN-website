@@ -232,15 +232,75 @@ def _contained(inner: list[float], outer: list[float]) -> float:
     return (iw * ih) / area if area > 0 else 0.0
 
 
-def _nms(dets: list["Detection"], thresh: float = 0.45) -> list["Detection"]:
-    """Suppress overlapping boxes of the same class, keeping the confident one.
+def _merge_overlapping(dets: list["Detection"], frame_area: float,
+                       iou_thresh: float = 0.30, contain_thresh: float = 0.55,
+                       gap_px: float = 8.0) -> list["Detection"]:
+    """Collapse every box covering one defect into a single box.
 
-    Tiles overlap deliberately, so a defect straddling a seam is found twice.
-    Plain IoU is not enough once tiled results are merged with the whole-frame
-    pass: a tile sees part of a large defect and returns a small box sitting
-    entirely inside the big one. Their IoU is low, so both survive and the
-    result reads as two potholes where there is one. Containment catches that.
+    The detector reports regions, not defects. A large pothole straddling the
+    seams of the tile grid comes back as several boxes — some overlapping, some
+    nested inside a bigger one, some merely touching. Suppression alone leaves
+    the survivors sitting on top of each other, which reads to anyone looking
+    at it as a dozen potholes where there is one, and makes the annotated image
+    unusable as evidence.
+
+    So rather than discarding the extras, they are unioned. Boxes of the same
+    class merge when they overlap by IoU, when one is largely contained in the
+    other, or when they are within a few pixels of touching. Merging repeats
+    until nothing changes, so a chain of fragments collapses to one box rather
+    than a pair at a time. The merged box keeps the highest confidence of its
+    parts — the best evidence for the defect, not an average diluted by the
+    weak fragments that overlapped it.
     """
+    boxes = [
+        {"label": d.label, "conf": d.confidence,
+         "x1": min(d.box[0], d.box[2]), "y1": min(d.box[1], d.box[3]),
+         "x2": max(d.box[0], d.box[2]), "y2": max(d.box[1], d.box[3])}
+        for d in dets
+    ]
+
+    changed = True
+    while changed:
+        changed = False
+        out: list[dict] = []
+        for b in sorted(boxes, key=lambda z: -((z["x2"] - z["x1"]) * (z["y2"] - z["y1"]))):
+            for k in out:
+                if k["label"] != b["label"]:
+                    continue
+                ix1, iy1 = max(b["x1"], k["x1"]), max(b["y1"], k["y1"])
+                ix2, iy2 = min(b["x2"], k["x2"]), min(b["y2"], k["y2"])
+                inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+                ab = (b["x2"] - b["x1"]) * (b["y2"] - b["y1"])
+                ak = (k["x2"] - k["x1"]) * (k["y2"] - k["y1"])
+                iou = inter / (ab + ak - inter + 1e-6)
+                contained = inter / (min(ab, ak) + 1e-6)
+                touching = (
+                    b["x1"] - gap_px < k["x2"] and k["x1"] - gap_px < b["x2"] and
+                    b["y1"] - gap_px < k["y2"] and k["y1"] - gap_px < b["y2"]
+                )
+                if iou > iou_thresh or contained > contain_thresh or touching:
+                    k["x1"], k["y1"] = min(k["x1"], b["x1"]), min(k["y1"], b["y1"])
+                    k["x2"], k["y2"] = max(k["x2"], b["x2"]), max(k["y2"], b["y2"])
+                    k["conf"] = max(k["conf"], b["conf"])
+                    changed = True
+                    break
+            else:
+                out.append(b)
+        boxes = out
+
+    merged = [
+        Detection(
+            label=b["label"], confidence=round(b["conf"], 3),
+            box=[b["x1"], b["y1"], b["x2"], b["y2"]],
+            area_ratio=round(((b["x2"] - b["x1"]) * (b["y2"] - b["y1"])) / max(frame_area, 1.0), 4),
+        )
+        for b in boxes
+    ]
+    return sorted(merged, key=lambda d: -d.confidence)
+
+
+def _nms(dets: list["Detection"], thresh: float = 0.45) -> list["Detection"]:
+    """Kept for callers that want suppression without merging."""
     kept: list[Detection] = []
     for d in sorted(dets, key=lambda x: -x.confidence):
         duplicate = any(
@@ -273,7 +333,7 @@ def _predict_tiled(model, img: np.ndarray, conf: float, frame_area: float,
             if tile.size == 0:
                 continue
             dets.extend(_predict(model, tile, conf, frame_area, ox=x0, oy=y0))
-    return _nms(dets)
+    return _merge_overlapping(dets, frame_area)
 
 
 def assess_scene(img: np.ndarray) -> dict:
@@ -370,7 +430,7 @@ def detect(data: bytes, conf: float = 0.25) -> dict:
                 if TAX.category_of(d.label) == established
             ]
             if extra:
-                merged = _nms(dets + extra)
+                merged = _merge_overlapping(dets + extra, frame_area)
                 if len(merged) > len(dets):
                     dets = merged
                     detector = "TRAINED+TILED"
@@ -501,28 +561,6 @@ def route_from_detections(dets: list["Detection"]) -> dict:
 #   * cracks    - thin, high-edge-density regions; orientation of the region
 #                 picks longitudinal vs transverse, a dense edge network picks
 #                 alligator cracking.
-
-def _nms(dets: list["Detection"], iou_thresh: float = 0.4) -> list["Detection"]:
-    """Greedy non-max suppression, highest confidence first."""
-    kept: list[Detection] = []
-    for d in sorted(dets, key=lambda x: x.confidence, reverse=True):
-        x1, y1, x2, y2 = d.box
-        overlap = False
-        for k in kept:
-            kx1, ky1, kx2, ky2 = k.box
-            ix1, iy1 = max(x1, kx1), max(y1, ky1)
-            ix2, iy2 = min(x2, kx2), min(y2, ky2)
-            iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-            inter = iw * ih
-            a1 = (x2 - x1) * (y2 - y1)
-            a2 = (kx2 - kx1) * (ky2 - ky1)
-            if inter / (a1 + a2 - inter + 1e-6) > iou_thresh:
-                overlap = True
-                break
-        if not overlap:
-            kept.append(d)
-    return kept
-
 
 def _road_mask(img: np.ndarray) -> np.ndarray:
     """Segment the drivable road surface so detection ignores sky and greenery.
@@ -713,7 +751,7 @@ def heuristic_detect(img: np.ndarray) -> list["Detection"]:
                               [float(x), float(y), float(x + bw), float(y + bh)],
                               round(rect_area / frame_area, 5)))
 
-    dets = _nms(dets, 0.35)
+    dets = _merge_overlapping(dets, float(img.shape[0] * img.shape[1]))
     # potholes are the headline defect — rank them first, then by size
     dets.sort(key=lambda d: (d.label != "Pothole", -d.area_ratio))
     return dets[:6]

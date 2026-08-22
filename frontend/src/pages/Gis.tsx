@@ -1,53 +1,238 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { MapContainer, TileLayer, CircleMarker, Circle, Marker, Popup, Tooltip, LayersControl, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { useApi } from "../lib/useApi";
 import { PageHeader, Card } from "../components/ui";
 
-type C = { id: string; lat: number; lng: number; severityScore: number | null; severityBand: string | null };
-type E = { id: string; code: string; lat: number; lng: number };
+type C = {
+  id: string; ref: string; title: string; lat: number; lng: number; zone: string;
+  category: string; civicCategory: string | null; status: string; priority: string;
+  severityScore: number | null; severityBand: string | null;
+  createdAt: string; slaHours: number | null;
+  engineer: { code: string; name: string } | null;
+};
+type E = {
+  id: string; code: string; name: string; zone: string; status: string;
+  lat: number; lng: number; skills: string; openJobs: number;
+  department: { name: string } | null;
+};
+type Landmark = { name: string; lat: number; lng: number; radiusM: number };
 
-const BAND: Record<string, string> = { SEVERE: "#ef4444", SIGNIFICANT: "#f59e0b", MODERATE: "#0ea5e9", MINOR: "#94a3b8", NONE: "#cbd5e1" };
-const LAT0 = 12.9, LAT1 = 13.04, LNG0 = 77.53, LNG1 = 77.69;
-const px = (lng: number) => ((lng - LNG0) / (LNG1 - LNG0)) * 880 + 30;
-const py = (lat: number) => (1 - (lat - LAT0) / (LAT1 - LAT0)) * 480 + 30;
+const BAND: Record<string, string> = {
+  SEVERE: "#ef4444", SIGNIFICANT: "#f59e0b", MODERATE: "#0ea5e9",
+  MINOR: "#94a3b8", NONE: "#cbd5e1",
+};
 
+/** Bengaluru centre — where the map opens before it fits to the data. */
+const CENTRE: [number, number] = [12.9716, 77.5946];
+
+/**
+ * Leaflet ships its marker icons as separate image files resolved by relative
+ * URL, which a bundler rewrites and breaks. Engineers are drawn as an inline
+ * SVG pin instead, so nothing has to be fetched.
+ */
+const engineerIcon = (openJobs: number) =>
+  L.divIcon({
+    className: "",
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+    html: `<div style="width:26px;height:26px;border-radius:6px;background:#10b981;border:2px solid #fff;
+      box-shadow:0 1px 4px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;
+      color:#fff;font:600 11px system-ui">${openJobs}</div>`,
+  });
+
+/**
+ * Frame the map on the data rather than a fixed zoom.
+ *
+ * A hardcoded zoom is wrong the moment the complaints move — and on a narrow
+ * container Leaflet can size itself before the layout settles and open far too
+ * wide. Fitting to the markers' bounds is correct in both cases, and
+ * invalidateSize forces a re-measure once the container has its real width.
+ */
+function FitToData({ points }: { points: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    map.invalidateSize();
+    if (points.length === 0) return;
+    map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 15 });
+  }, [map, points]);
+  return null;
+}
+
+const hoursOld = (iso: string) => (Date.now() - new Date(iso).getTime()) / 3_600_000;
+
+/**
+ * GIS Map — every open complaint on the real street map.
+ *
+ * The previous version projected latitude and longitude onto a hand-drawn SVG
+ * with decorative curves standing in for roads. The positions were right
+ * relative to each other, but there was no way to tell which street a pothole
+ * was on, and the "near a hospital" priority rule could not be checked by eye.
+ * OpenStreetMap tiles fix both: the markers now sit on the actual roads, and
+ * the landmark radii that drive priority are drawn where they really are.
+ */
 export function Gis() {
-  const { data, loading } = useApi<{ complaints: C[]; engineers: E[] }>("/gis");
-  if (loading || !data) return <p className="text-slate-400">Loading…</p>;
-  const { complaints, engineers } = data;
+  const { data, loading } = useApi<{ complaints: C[]; engineers: E[]; landmarks: Landmark[] }>("/gis");
+  const [band, setBand] = useState<string | null>(null);
+
+  const shown = useMemo(
+    () => (data?.complaints ?? []).filter((c) => !band || (c.severityBand ?? "NONE") === band),
+    [data, band],
+  );
+
+  // Frame on everything that has a position, complaints and engineers alike.
+  const fitPoints = useMemo<[number, number][]>(
+    () => [
+      ...(data?.complaints ?? []).map((c) => [c.lat, c.lng] as [number, number]),
+      ...(data?.engineers ?? []).map((e) => [e.lat, e.lng] as [number, number]),
+    ],
+    [data],
+  );
+
+  if (loading || !data) return <p className="text-slate-400">Loading map…</p>;
+  const { engineers, landmarks } = data;
+  const breached = shown.filter((c) => hoursOld(c.createdAt) > (c.slaHours ?? 48)).length;
 
   return (
     <>
-      <PageHeader title="GIS Map" subtitle={`${complaints.length} open complaints sized by CV severity · ${engineers.length} engineers on duty`} />
+      <PageHeader
+        title="GIS Map"
+        subtitle={`${shown.length} open complaints on the live street map · marker size by CV severity · ${engineers.length} engineers on duty`}
+      />
+
       <Card>
-        <div className="overflow-x-auto">
-          <svg viewBox="0 0 940 540" className="min-w-[720px] rounded-lg" style={{ background: "linear-gradient(160deg,#eef4f8,#e4ecf4)" }}>
-            {[0, 1].map((r) => [0, 1, 2].map((c) => (
-              <rect key={`${r}${c}`} x={30 + c * 293} y={30 + r * 240} width={293} height={240} fill="none" stroke="#cbd5e1" strokeDasharray="6 5" strokeWidth={1} />
-            )))}
-            <path d="M30 300 C 260 250, 620 340, 910 280" stroke="#ffffff" strokeWidth={10} fill="none" />
-            <path d="M420 30 C 450 220, 400 380, 470 510" stroke="#ffffff" strokeWidth={8} fill="none" />
-            {complaints.map((c) => {
-              const sev = c.severityScore ?? 0; const r = 4 + (sev / 100) * 9; const color = BAND[c.severityBand ?? "NONE"];
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Filter</span>
+          {["SEVERE", "SIGNIFICANT", "MODERATE", "MINOR"].map((b) => (
+            <button
+              key={b}
+              onClick={() => setBand(band === b ? null : b)}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition ${
+                band === b ? "border-slate-400 bg-slate-100 font-semibold text-slate-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: BAND[b] }} />
+              {b.charAt(0) + b.slice(1).toLowerCase()}
+            </button>
+          ))}
+          {band && (
+            <button onClick={() => setBand(null)} className="text-xs text-brand-700 underline">clear</button>
+          )}
+          <span className="ml-auto text-xs text-slate-500">
+            {breached} past SLA · click a marker for the complaint
+          </span>
+        </div>
+
+        <div className="overflow-hidden rounded-lg border border-slate-200">
+          <MapContainer center={CENTRE} zoom={12} scrollWheelZoom style={{ height: 560, width: "100%" }}>
+            <FitToData points={fitPoints} />
+            <LayersControl position="topright">
+              <LayersControl.BaseLayer checked name="Street">
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+              </LayersControl.BaseLayer>
+              <LayersControl.BaseLayer name="Muted">
+                <TileLayer
+                  attribution='&copy; OpenStreetMap contributors &copy; CARTO'
+                  url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                />
+              </LayersControl.BaseLayer>
+            </LayersControl>
+
+            {/* The landmark radii the priority rule actually scores against. */}
+            {landmarks.map((l) => (
+              <Circle
+                key={l.name}
+                center={[l.lat, l.lng]}
+                radius={l.radiusM}
+                pathOptions={{ color: "#6366f1", weight: 1, fillColor: "#6366f1", fillOpacity: 0.06, dashArray: "4 4" }}
+              >
+                <Tooltip>{l.name} · complaints within {l.radiusM} m score higher</Tooltip>
+              </Circle>
+            ))}
+
+            {shown.map((c) => {
+              const sev = c.severityScore ?? 0;
+              const colour = BAND[c.severityBand ?? "NONE"];
+              const overdue = hoursOld(c.createdAt) > (c.slaHours ?? 48);
               return (
-                <g key={c.id}>
-                  {sev >= 60 && <circle cx={px(c.lng)} cy={py(c.lat)} r={r + 7} fill={color} opacity={0.16} />}
-                  <circle cx={px(c.lng)} cy={py(c.lat)} r={r} fill={color} stroke="#fff" strokeWidth={1.5} />
-                </g>
+                <CircleMarker
+                  key={c.id}
+                  center={[c.lat, c.lng]}
+                  radius={5 + (sev / 100) * 9}
+                  pathOptions={{
+                    color: overdue ? "#7f1d1d" : "#ffffff",
+                    weight: overdue ? 2.5 : 1.5,
+                    fillColor: colour,
+                    fillOpacity: 0.85,
+                  }}
+                >
+                  <Popup>
+                    <div className="min-w-[210px] text-xs">
+                      <Link to={`/app/complaints/${c.ref}`} className="font-mono font-bold text-brand-700 hover:underline">
+                        {c.ref}
+                      </Link>
+                      <p className="mt-1 font-medium text-slate-800">{c.title}</p>
+                      <table className="mt-2 w-full">
+                        <tbody className="text-slate-600">
+                          <tr><td className="pr-2">Damage</td><td className="font-medium text-slate-800">{c.category}</td></tr>
+                          <tr><td className="pr-2">Priority</td><td className="font-medium text-slate-800">{c.priority}</td></tr>
+                          <tr><td className="pr-2">Severity</td><td className="font-medium text-slate-800">{sev.toFixed(1)} / 100</td></tr>
+                          <tr><td className="pr-2">Status</td><td className="font-medium text-slate-800">{c.status}</td></tr>
+                          <tr><td className="pr-2">Zone</td><td className="font-medium text-slate-800">{c.zone}</td></tr>
+                          <tr><td className="pr-2">Engineer</td><td className="font-medium text-slate-800">{c.engineer ? `${c.engineer.name} (${c.engineer.code})` : "Unassigned"}</td></tr>
+                        </tbody>
+                      </table>
+                      {overdue && <p className="mt-1.5 font-semibold text-red-700">Past its {c.slaHours ?? 48} h SLA</p>}
+                    </div>
+                  </Popup>
+                </CircleMarker>
               );
             })}
+
             {engineers.map((e) => (
-              <g key={e.id}>
-                <rect x={px(e.lng) - 6} y={py(e.lat) - 6} width={12} height={12} rx={2} fill="#10b981" stroke="#fff" strokeWidth={2} />
-                <text x={px(e.lng) + 11} y={py(e.lat) + 4} fontSize={10} fill="#475569" fontWeight={600}>{e.code}</text>
-              </g>
+              <Marker key={e.id} position={[e.lat, e.lng]} icon={engineerIcon(e.openJobs)}>
+                <Popup>
+                  <div className="min-w-[190px] text-xs">
+                    <p className="font-semibold text-slate-900">{e.name}</p>
+                    <p className="font-mono text-[10px] text-slate-500">{e.code}</p>
+                    <table className="mt-2 w-full">
+                      <tbody className="text-slate-600">
+                        <tr><td className="pr-2">Department</td><td className="font-medium text-slate-800">{e.department?.name ?? "—"}</td></tr>
+                        <tr><td className="pr-2">Zone</td><td className="font-medium text-slate-800">{e.zone}</td></tr>
+                        <tr><td className="pr-2">Open jobs</td><td className="font-medium text-slate-800">{e.openJobs}</td></tr>
+                        <tr><td className="pr-2">Skills</td><td className="font-medium text-slate-800">{e.skills}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </Popup>
+              </Marker>
             ))}
-          </svg>
+          </MapContainer>
         </div>
+
         <div className="mt-4 flex flex-wrap items-center gap-5 text-xs text-slate-600">
           <span className="font-semibold uppercase tracking-wide text-slate-400">Legend</span>
           {["SEVERE", "SIGNIFICANT", "MODERATE", "MINOR"].map((b) => (
-            <span key={b} className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ background: BAND[b] }} />{b.charAt(0) + b.slice(1).toLowerCase()}</span>
+            <span key={b} className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: BAND[b] }} />
+              {b.charAt(0) + b.slice(1).toLowerCase()}
+            </span>
           ))}
-          <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-sm border-2 border-white bg-emerald-500 shadow" /> Engineer</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="flex h-4 w-4 items-center justify-center rounded-sm border-2 border-white bg-emerald-500 text-[8px] font-bold text-white shadow">n</span>
+            Engineer, showing open jobs
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full border-2 border-red-900" /> Past SLA
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full border border-dashed border-indigo-400 bg-indigo-50" /> Landmark radius
+          </span>
           <span className="text-slate-400">Marker radius ∝ severity score</span>
         </div>
       </Card>

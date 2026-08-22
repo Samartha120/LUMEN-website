@@ -8,6 +8,13 @@ import { computeAssignmentPlan } from "../lib/assignment.js";
 const router = Router();
 const OPEN = ["SUBMITTED", "ASSIGNED", "IN_PROGRESS", "PENDING_REVIEW"];
 
+/** Mirrors lib/priority.ts — the places that raise a complaint's priority. */
+const LANDMARKS = [
+  { name: "Hospital", lat: 12.9719, lng: 77.5937, radiusM: 500 },
+  { name: "School", lat: 12.9352, lng: 77.6245, radiusM: 500 },
+  { name: "Major highway", lat: 12.957, lng: 77.639, radiusM: 500 },
+];
+
 router.get("/health", async (_req, res) => {
   res.json({ ai: await aiHealth() });
 });
@@ -17,12 +24,39 @@ router.get("/dashboard", requireAuth, async (_req, res) => {
   res.json({ complaints, ai: await aiHealth() });
 });
 
+/**
+ * Map data. Only the fields a marker and its popup need — the previous version
+ * returned whole complaint rows including detection JSON and base64 image
+ * paths, roughly 200 KB for a view that draws dots.
+ */
 router.get("/gis", requireAuth, async (_req, res) => {
   const [complaints, engineers] = await Promise.all([
-    db.complaint.findMany({ where: { status: { in: OPEN } } }),
-    db.engineer.findMany({ where: { status: { not: "OFF_DUTY" } } }),
+    db.complaint.findMany({
+      where: { status: { in: OPEN }, duplicateOfId: null },
+      select: {
+        id: true, ref: true, title: true, lat: true, lng: true, zone: true,
+        category: true, civicCategory: true, status: true, priority: true,
+        severityScore: true, severityBand: true, createdAt: true, slaHours: true,
+        engineer: { select: { code: true, name: true } },
+      },
+    }),
+    db.engineer.findMany({
+      where: { status: { not: "OFF_DUTY" } },
+      select: {
+        id: true, code: true, name: true, zone: true, status: true,
+        lat: true, lng: true, skills: true,
+        department: { select: { name: true } },
+        complaints: { where: { status: { in: ["ASSIGNED", "IN_PROGRESS"] } }, select: { id: true } },
+      },
+    }),
   ]);
-  res.json({ complaints, engineers });
+  res.json({
+    complaints,
+    engineers: engineers.map((e) => ({ ...e, openJobs: e.complaints.length, complaints: undefined })),
+    // The landmarks the priority rule scores against, so the map can show why
+    // a complaint near one is ranked higher.
+    landmarks: LANDMARKS,
+  });
 });
 
 router.get("/engineers", requireAuth, requireRole("ADMINISTRATOR", "SUPERVISOR"), async (_req, res) => {

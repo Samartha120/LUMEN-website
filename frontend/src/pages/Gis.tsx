@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { MapContainer, TileLayer, CircleMarker, Circle, Marker, Popup, Tooltip, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -18,7 +18,10 @@ type E = {
   lat: number; lng: number; skills: string; openJobs: number;
   department: { name: string } | null;
 };
-type Landmark = { name: string; lat: number; lng: number; radiusM: number; risk?: number };
+type Landmark = {
+  name: string; type?: string; lat: number; lng: number;
+  radiusM: number; risk?: number;
+};
 
 const BAND: Record<string, string> = {
   SEVERE: "#ef4444", SIGNIFICANT: "#f59e0b", MODERATE: "#0ea5e9",
@@ -43,9 +46,19 @@ const engineerIcon = (openJobs: number) =>
       color:#fff;font:600 11px system-ui">${openJobs}</div>`,
   });
 
-const LANDMARK_GLYPH: Record<string, string> = {
-  Hospital: "H", School: "S", "Major highway": "M",
+/**
+ * Landmark kinds, matching lib/landmarks.ts on the backend.
+ *
+ * Colour carries the kind and the glyph repeats it, so the map stays readable
+ * for anyone who cannot separate the hues.
+ */
+const LANDMARK_KIND: Record<string, { glyph: string; colour: string; label: string }> = {
+  HOSPITAL:  { glyph: "H", colour: "#dc2626", label: "Hospital" },
+  TRANSPORT: { glyph: "T", colour: "#7c3aed", label: "Transport hub" },
+  SCHOOL:    { glyph: "S", colour: "#2563eb", label: "School" },
+  MARKET:    { glyph: "M", colour: "#a16207", label: "Market" },
 };
+const kindOf = (t?: string) => LANDMARK_KIND[t ?? ""] ?? { glyph: "•", colour: "#4f46e5", label: "Landmark" };
 
 /**
  * A landmark needs a permanent, readable label, not a hover tooltip.
@@ -55,26 +68,115 @@ const LANDMARK_GLYPH: Record<string, string> = {
  * name hidden behind a hover reads as decoration, so the claim looks unverified.
  * The name and the exact number of points it contributes are drawn on the map.
  */
-const landmarkIcon = (name: string, risk?: number) =>
-  L.divIcon({
+const landmarkIcon = (name: string, type?: string, risk?: number, withName = true) => {
+  const k = kindOf(type);
+  const badge = `<span style="width:19px;height:19px;flex:none;border-radius:50%;background:${k.colour};
+      color:#fff;display:flex;align-items:center;justify-content:center;font:700 10px system-ui;
+      box-shadow:0 1px 4px rgba(0,0,0,.3);border:1.5px solid #fff">${k.glyph}</span>`;
+
+  // Below a useful zoom the names of twenty-two landmarks overlap into an
+  // unreadable mess, so only the coloured badge is drawn and the name moves to
+  // the tooltip. The full label returns once there is room for it.
+  if (!withName) {
+    return L.divIcon({
+      className: "", iconSize: [0, 0], iconAnchor: [0, 0],
+      html: `<div style="position:absolute;transform:translate(-50%,-50%)">${badge}</div>`,
+    });
+  }
+
+  // The "+N" is dropped rather than rendered as "+undefined" when an older
+  // backend is still serving landmarks without their risk weighting.
+  return L.divIcon({
     className: "",
     iconSize: [0, 0],
     iconAnchor: [0, 0],
-    // The "+N" is dropped rather than rendered as "+undefined" when an older
-    // backend is still serving landmarks without their risk weighting.
     html: `<div style="position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;
-      gap:5px;white-space:nowrap;background:#fff;border:1.5px solid #4f46e5;border-radius:999px;
+      gap:5px;white-space:nowrap;background:#fff;border:1.5px solid ${k.colour};border-radius:999px;
       padding:2px 8px 2px 3px;box-shadow:0 1px 5px rgba(0,0,0,.28)">
-      <span style="width:17px;height:17px;border-radius:50%;background:#4f46e5;color:#fff;
-        display:flex;align-items:center;justify-content:center;font:700 10px system-ui">${
-          LANDMARK_GLYPH[name] ?? "•"
-        }</span>
-      <span style="font:600 11px system-ui;color:#312e81">${name}</span>
+      ${badge}
+      <span style="font:600 11px system-ui;color:#0f172a">${name}</span>
       ${typeof risk === "number"
-        ? `<span style="font:700 10px system-ui;color:#4f46e5">+${risk}</span>`
+        ? `<span style="font:700 10px system-ui;color:${k.colour}">+${risk}</span>`
         : ""}
     </div>`,
   });
+};
+
+/** Current zoom, so labels can be shown only when there is room for them. */
+function useZoom() {
+  const map = useMap();
+  const [zoom, setZoom] = useState(map.getZoom());
+  useEffect(() => {
+    const on = () => setZoom(map.getZoom());
+    map.on("zoomend", on);
+    return () => { map.off("zoomend", on); };
+  }, [map]);
+  return zoom;
+}
+
+/**
+ * The civic context that drives priority: hospitals, transport interchanges,
+ * highway junctions, schools, government offices, markets and lakes.
+ *
+ * Every one of these is a place `lib/priority.ts` scores against — the map and
+ * the rule read the same list — so a complaint's "+12 near a hospital" can be
+ * traced to the exact ring it falls inside.
+ */
+function LandmarkLayer({ landmarks, shown }: { landmarks: Landmark[]; shown: C[] }) {
+  const zoom = useZoom();
+  // Twenty-two name pills collide at city zoom; badges alone stay legible.
+  const withNames = zoom >= 13;
+
+  return (
+    <>
+      {landmarks.map((l) => {
+        const k = kindOf(l.type);
+        const inside = shown.filter(
+          (c) => metresBetween(c.lat, c.lng, l.lat, l.lng) <= l.radiusM,
+        ).length;
+        return (
+          <Fragment key={l.name}>
+            <Circle
+              center={[l.lat, l.lng]}
+              radius={l.radiusM}
+              pathOptions={{
+                color: k.colour, weight: 2, fillColor: k.colour,
+                fillOpacity: 0.12, dashArray: "6 4",
+              }}
+            >
+              <Tooltip>
+                {l.name} · a complaint within {l.radiusM} m scores
+                {typeof l.risk === "number" ? ` +${l.risk}` : " higher"} on priority
+              </Tooltip>
+            </Circle>
+
+            <Marker
+              position={[l.lat, l.lng]}
+              icon={landmarkIcon(l.name, l.type, l.risk, withNames)}
+              zIndexOffset={500}
+            >
+              {!withNames && <Tooltip>{l.name}</Tooltip>}
+              <Popup>
+                <div className="min-w-[210px] text-xs">
+                  <p className="font-semibold text-slate-900">{l.name}</p>
+                  <p className="font-medium" style={{ color: k.colour }}>{k.label}</p>
+                  <p className="mt-1.5 text-slate-600">
+                    Any open complaint within <b>{l.radiusM} m</b> of here
+                    {typeof l.risk === "number" ? <> gains <b>+{l.risk}</b> on</> : " gains a boost to"}{" "}
+                    its priority score.
+                  </p>
+                  <p className="mt-1.5 text-slate-500">
+                    <b>{inside}</b> of the complaints shown {inside === 1 ? "is" : "are"} inside this radius.
+                  </p>
+                </div>
+              </Popup>
+            </Marker>
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
 
 /**
  * Frame the map on the data rather than a fixed zoom.
@@ -240,51 +342,17 @@ export function Gis() {
                   url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
                 />
               </LayersControl.BaseLayer>
+              {/* Satellite imagery: at close zoom the actual buildings around a
+                  complaint are visible, which the drawn basemaps only outline. */}
+              <LayersControl.BaseLayer name="Satellite">
+                <TileLayer
+                  attribution="Imagery &copy; Esri, Maxar, Earthstar Geographics"
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                />
+              </LayersControl.BaseLayer>
             </LayersControl>
 
-            {/* The landmark radii the priority rule actually scores against.
-                Drawn solidly enough to read over street tiles — at city zoom a
-                500 m ring is barely 60 px across, and the previous 1 px dashed
-                outline at 6% fill was invisible against the map. */}
-            {landmarks.map((l) => (
-              <Circle
-                key={l.name}
-                center={[l.lat, l.lng]}
-                radius={l.radiusM}
-                pathOptions={{ color: "#4f46e5", weight: 2.5, fillColor: "#6366f1", fillOpacity: 0.16, dashArray: "6 4" }}
-              >
-                <Tooltip>
-                  {l.name} · a complaint within {l.radiusM} m scores
-                  {typeof l.risk === "number" ? ` +${l.risk}` : " higher"} on priority
-                </Tooltip>
-              </Circle>
-            ))}
-
-            {/* Named on the map rather than on hover, so "Near School +9" in a
-                complaint's priority breakdown can be checked by eye. */}
-            {landmarks.map((l) => (
-              <Marker
-                key={`${l.name}-label`}
-                position={[l.lat, l.lng]}
-                icon={landmarkIcon(l.name, l.risk)}
-                zIndexOffset={500}
-              >
-                <Popup>
-                  <div className="min-w-[190px] text-xs">
-                    <p className="font-semibold text-slate-900">{l.name}</p>
-                    <p className="mt-1 text-slate-600">
-                      Any open complaint within <b>{l.radiusM} m</b> of here
-                      {typeof l.risk === "number" ? <> gains <b>+{l.risk}</b> on</> : " gains a boost to"}{" "}
-                      its priority score.
-                    </p>
-                    <p className="mt-1.5 text-slate-500">
-                      {shown.filter((c) => metresBetween(c.lat, c.lng, l.lat, l.lng) <= l.radiusM).length}{" "}
-                      of the complaints shown are inside this radius.
-                    </p>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
+            <LandmarkLayer landmarks={landmarks} shown={shown} />
 
             {shown.map((c) => {
               const sev = c.severityScore ?? 0;
@@ -361,11 +429,36 @@ export function Gis() {
           <span className="inline-flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-full border-2 border-red-900" /> Past SLA
           </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-600 text-[8px] font-bold text-white">S</span>
-            Landmark · complaints within 500 m score higher
-          </span>
           <span className="text-slate-400">Marker radius ∝ severity score</span>
+        </div>
+
+        {/* The civic context the priority rule scores against. Each badge is a
+            real place, and the number is the points a complaint inside its
+            radius gains — so the legend doubles as the scoring table. */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
+          <span className="font-semibold uppercase tracking-wide text-slate-400">
+            Priority landmarks
+          </span>
+          {Object.entries(LANDMARK_KIND).map(([key, k]) => {
+            const points = landmarks.find((l) => l.type === key)?.risk;
+            return (
+              <span key={key} className="inline-flex items-center gap-1.5">
+                <span
+                  className="flex h-4 w-4 items-center justify-center rounded-full border border-white text-[8px] font-bold text-white shadow"
+                  style={{ background: k.colour }}
+                >
+                  {k.glyph}
+                </span>
+                {k.label}
+                {typeof points === "number" && (
+                  <b style={{ color: k.colour }}>+{points}</b>
+                )}
+              </span>
+            );
+          })}
+          <span className="text-slate-400">
+            Names appear as you zoom in · location risk is capped at +18
+          </span>
         </div>
       </Card>
     </>

@@ -1,4 +1,5 @@
 import { haversineMeters } from "./geo.js";
+import { LANDMARKS } from "./landmarks.js";
 import { categoryOf, type CategoryKey } from "./taxonomy.js";
 
 type Location = { lat: number; lng: number };
@@ -17,13 +18,9 @@ export type PriorityResult = {
   };
 };
 
-// These demo locations make the rule explainable and can be replaced with a
-// municipal GIS feed without changing the scoring contract.
-const SENSITIVE_LOCATIONS: Array<Location & { name: string; risk: number }> = [
-  { name: "Hospital", lat: 12.9719, lng: 77.5937, risk: 12 },
-  { name: "School", lat: 12.9352, lng: 77.6245, risk: 9 },
-  { name: "Major highway", lat: 12.9570, lng: 77.6390, risk: 10 },
-];
+// The places that raise priority live in lib/landmarks.ts, which the GIS map
+// reads too — so what the map draws and what the score counts cannot diverge.
+const SENSITIVE_LOCATIONS = LANDMARKS;
 
 const DEPARTMENT_RISK: Record<CategoryKey, number> = {
   ROADS: 4, WASTE: 2, WATER: 8,
@@ -38,7 +35,11 @@ export function calculatePriority(input: {
   nearbyReports: number;
   createdAt?: Date;
 }): PriorityResult {
-  const nearby = SENSITIVE_LOCATIONS.filter((place) => haversineMeters(input.lat, input.lng, place.lat, place.lng) <= 500);
+  // Each landmark carries its own radius — a highway junction reaches further
+  // than a school gate, and a lake's flood catchment further still.
+  const nearby = SENSITIVE_LOCATIONS.filter(
+    (place) => haversineMeters(input.lat, input.lng, place.lat, place.lng) <= place.radiusM,
+  );
   const locationRisk = Math.min(18, nearby.reduce((sum, place) => sum + place.risk, 0));
   const category = categoryOf(input.categoryLabel);
   const departmentRisk = category ? DEPARTMENT_RISK[category] : 0;

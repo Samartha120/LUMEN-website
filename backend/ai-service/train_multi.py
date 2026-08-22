@@ -106,6 +106,25 @@ SOURCE_MAP: dict[str, dict[str, str | None]] = {
         "flood": "Waterlogging",
         "leak": "Pipe Leak",
     },
+    # A multi-class civic set with a shared label space across its folders.
+    # Its pothole images are deliberately not imported: potholes are served by
+    # the segmentation specialist (see model.py), and this set's boxes would
+    # only dilute the multi-class model further.
+    #
+    # open_manhole is the valuable part — the manhole source already on disk
+    # has no validation split at all, so that class could not be measured.
+    # good_road carries no boxes on purpose: a detector needs negatives to
+    # learn what intact tarmac looks like, and the merge keeps label-free
+    # images as background.
+    "civic": {
+        "open_manhole": "Open Manhole",
+        "waste_container": "Overflowing Bin",
+        "cracks": "Alligator Crack",
+        "good_road": None,
+        "pothole": None,
+        "animal": None,
+        "traffic_light": None,
+    },
     # The sidewalk sources are kept on disk but no longer mapped. Broken
     # Footpath was trained and measured at 4/20 detected, 1/20 correctly
     # classified: the annotations label hairline paving cracks inconsistently,

@@ -49,10 +49,18 @@ It is a single-class YOLOv8n-seg pothole model by Farzad Nekouei, MIT licensed.
 because that model spends its capacity across five classes and misses potholes
 shot from unusual angles. Measured on the held-out close-up photos:
 
-| configuration | shows a box | correct | precision | recall |
-| --- | --- | --- | --- | --- |
-| specialist off | 18/23 | 20 | 0.952 | 0.400 |
-| specialist on | 19/23 | 21 | 0.955 | 0.420 |
+Measured on 60 labelled photos from an unrelated Roboflow project — the honest
+proxy for a picture pulled off Google, since our own pothole source shares its
+photographers with the training data:
+
+| configuration | shows a box | correct | precision |
+| --- | --- | --- | --- |
+| specialist off | 11/60 (18%) | 9 | 0.818 |
+| specialist on | 37/60 (62%) | 37 | 0.771 |
+
+Expect roughly **3 in 5** arbitrary web pothole photos to produce a box. On our
+own held-out photos it reaches 87%, but that figure flatters — same
+distribution as training.
 
 Without the file the service still runs — the specialist is skipped silently
 and detection falls back to the multi-class model alone. Set

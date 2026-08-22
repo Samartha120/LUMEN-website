@@ -50,14 +50,28 @@ FALLBACK_WEIGHTS = "yolo11n.pt"
 #     ours alone                        13       15      0.938   0.300
 #     ours, else specialist @0.70       17       21      0.955   0.420
 #
-# The bar is 0.70 rather than 0.50 because this runs precisely when the primary
-# model saw nothing, so the prior is already against there being damage.
+# The bar was first set to 0.70, tuned on the held-out slice of our own pothole
+# source. That was the wrong test set: the model trained on 238 of those 261
+# images, so the held-out 23 share their photographers and style and flatter it.
+#
+# Re-measured on an independent set — 60 labelled photos from a different
+# Roboflow project, which is the honest proxy for "a photo pulled off Google":
+#
+#     specialist bar   shows a box   correct  precision  recall
+#     off               11/60 (18%)        9      0.818   0.070
+#     0.70              33/60 (55%)       31      0.775   0.242
+#     0.50              37/60 (62%)       37      0.771   0.289
+#     0.30              39/60 (65%)       36      0.667   0.281
+#
+# 0.50 wins on every axis that matters and 0.30 overshoots — it draws more boxes
+# but gets fewer of them right. Note the first row: without the specialist this
+# detector finds a pothole in fewer than one web photo in five.
 #
 # It replaces the classical fallback that used to fill this slot and put a 0.61
 # confidence box on a puddle. Single-class, so it can only ever add potholes —
 # it cannot invent a garbage pile or misroute a complaint to another department.
 SPECIALIST_WEIGHTS = WEIGHTS_DIR / "pothole_specialist.pt"
-SPECIALIST_MIN_CONF = 0.70
+SPECIALIST_MIN_CONF = 0.50
 USE_POTHOLE_SPECIALIST = os.environ.get("LUMEN_POTHOLE_SPECIALIST", "1") == "1"
 
 # Raw model label -> taxonomy label (RDD2022 codes etc.)

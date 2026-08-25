@@ -95,10 +95,30 @@ SOURCE_MAP: dict[str, dict[str, str | None]] = {
     },
     "water": {
         # Roboflow "manhole-cover-dataset-yolo": Broken / Good / Lose / Uncovered.
-        # "Good" is an intact cover — not damage — so it is dropped.
+        # Mapping to None drops the BOX but keeps the image with an empty label
+        # file, so those photographs still train as background — which is what
+        # makes the distinction below matter rather than merely tidy.
+        #
+        # "Lose" no longer maps to Open Manhole. Inspecting the 422 images
+        # labelled only "Lose", most show a completely intact cover seated flush
+        # in the pavement — flat slabs, closed round covers — and only a
+        # minority show an exposed hole. Training those as the hazard put 422
+        # pictures of closed covers in direct contradiction with the 508 "Good"
+        # covers already serving as background. The model was taught two
+        # opposite things about the same picture and went with the hazard: it
+        # called an intact cover on Cunningham Road an Open Manhole at 0.80
+        # (CMP-10281) and invented one on a rubbish pile at 0.34 (CMP-10272).
+        #
+        # Reclassifying "Lose" as background leaves 472 unambiguous positives
+        # against 930 negatives, and the two groups stop looking identical.
+        # The cost is honest: a genuinely displaced cover with the hole showing
+        # is now unlabelled in a minority of those 422, so some real hazards
+        # train as background. That is the safer error — a missed manhole is
+        # re-reported by the next citizen, while crying wolf on every cover in
+        # the city trains supervisors to ignore the class entirely.
         "Uncovered": "Open Manhole",
         "Broken": "Open Manhole",
-        "Lose": "Open Manhole",
+        "Lose": None,
         "Good": None,
         "manhole": "Open Manhole",
         "open_manhole": "Open Manhole",

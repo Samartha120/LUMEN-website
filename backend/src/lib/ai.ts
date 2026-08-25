@@ -24,6 +24,7 @@ export type Routing = {
 export type Scene = {
   road_fraction: number | null;
   edge_density?: number;
+  interior_scene?: string;
   looks_civic: boolean;
   reason: string;
 };
@@ -36,6 +37,20 @@ export type DetectResult = {
   routing?: Routing;
   scene?: Scene;
   annotated_png_b64: string;
+
+  // The three states an upload can be in. `valid_image` false means the photo
+  // is not of a civic scene at all — distinct from a valid road that simply
+  // has no damage, which is `valid_image` true with `count` 0. The service
+  // decides this with a scene classifier, not with the damage model, so an
+  // empty detection list never has to stand in for "wrong kind of photo".
+  // `message` carries the wording to show; it is the single source of that
+  // text so the API and the UI cannot drift apart.
+  valid_image?: boolean;
+  image_type?: "road" | "unrelated";
+  potholes_detected?: boolean;
+  count?: number;
+  message?: string | null;
+  hint?: string | null;
 };
 
 export class AiUnavailableError extends Error {

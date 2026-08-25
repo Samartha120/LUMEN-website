@@ -265,9 +265,16 @@ export function ComplaintDetail() {
           <Card title="Priority Assessment">
             <SeverityMeter score={c.severityScore} band={c.severityBand} />
             <dl className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-sm">
-              <div className="flex justify-between"><dt className="text-slate-500">AI Severity</dt><dd className="font-medium text-slate-800">{c.severityScore?.toFixed(1) ?? "—"} / 100</dd></div>
-              <div className="flex justify-between"><dt className="text-slate-500">Priority Level</dt><dd><PriorityBadge priority={c.priority} /></dd></div>
-              <div className="flex justify-between"><dt className="text-slate-500">Priority Score</dt><dd className="font-medium text-slate-800">{c.priorityScore ?? "—"} / 100</dd></div>
+              {/* Ordered so each line follows from the one above it. Severity is
+                  what the detector saw; the priority score adds where it is, how
+                  long it has waited and how many people reported it; the level is
+                  a band on that score. Shown the other way round, the badge sat
+                  under the severity figure and read as if it came from it —
+                  which is how a complaint at severity 61 showing MEDIUM looks
+                  like a bug rather than a road with no hospital next to it. */}
+              <div className="flex justify-between gap-3"><dt className="text-slate-500">Damage severity<span className="block text-xs text-slate-400">what the photo shows</span></dt><dd className="font-medium text-slate-800">{c.severityScore?.toFixed(1) ?? "—"} / 100</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-slate-500">Priority score<span className="block text-xs text-slate-400">severity + location, age, reports</span></dt><dd className="font-medium text-slate-800">{c.priorityScore ?? "—"} / 100</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-slate-500">Priority level<span className="block text-xs text-slate-400">band on the score above</span></dt><dd><PriorityBadge priority={c.priority} /></dd></div>
             </dl>
 
             {reasons.length > 0 && (

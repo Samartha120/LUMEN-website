@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+import scene_classifier
 import taxonomy as TAX
 
 WEIGHTS_DIR = Path(__file__).parent / "weights"
@@ -73,6 +74,238 @@ FALLBACK_WEIGHTS = "yolo11n.pt"
 SPECIALIST_WEIGHTS = WEIGHTS_DIR / "pothole_specialist.pt"
 SPECIALIST_MIN_CONF = 0.50
 USE_POTHOLE_SPECIALIST = os.environ.get("LUMEN_POTHOLE_SPECIALIST", "1") == "1"
+# Whether the segmentation specialist may report potholes on its own account,
+# as opposed to only drawing the outline of one the primary detector found.
+# Off: it produced whole-frame false positives that the primary model correctly
+# ignored. Set LUMEN_SPECIALIST_DETECTS=1 to restore the old behaviour.
+SPECIALIST_CONTRIBUTES_DETECTIONS = os.environ.get("LUMEN_SPECIALIST_DETECTS", "0") == "1"
+# Report the fine-tuned pothole model's boxes as it reported them, rather than
+# passing them through the sky/person/road-coverage filters written for the
+# older, weaker detector. Set LUMEN_RAW_POTHOLE=0 to put the filters back.
+RAW_POTHOLE_PASSTHROUGH = os.environ.get("LUMEN_RAW_POTHOLE", "1") == "1"
+# Union overlapping boxes into one, rather than suppressing the weaker of them.
+# Off — see _merge_overlapping. Set LUMEN_UNION_MERGE=1 alongside tiling.
+UNION_MERGE = os.environ.get("LUMEN_UNION_MERGE", "0") == "1"
+# Let the multi-class civic model contribute detections. Off: it is the one
+# model here never retrained with hard negatives and it invents low-confidence
+# manholes and potholes on rubbish. Set LUMEN_MULTICLASS=1 to restore it —
+# necessary for waste, water and crack detection, which nothing else covers.
+USE_MULTICLASS_MODEL = os.environ.get("LUMEN_MULTICLASS", "1") == "1"
+# Classes the multi-class model may report. "Open Manhole" is withheld: it is
+# the one class whose training labels are contaminated, and it calls intact
+# closed covers a fall hazard at 0.80 confidence (CMP-10281). The cause is in
+# train_multi.SOURCE_MAP — 422 images labelled only "Lose" show a cover seated
+# flush in the pavement, and they were mapped to Open Manhole as positives,
+# contradicting 508 near-identical closed covers trained as background. The
+# model resolved that toward the hazard.
+#
+# Suppressing one class keeps Garbage Pile, Overflowing Bin and Alligator
+# Crack working — they are detected correctly (30/30, 10/13, 5/5) and they are
+# what makes this a three-department civic platform rather than a pothole app.
+# Re-add it to this set once the multi-class model is retrained with Lose
+# remapped to background.
+SUPPRESSED_CLASSES = {
+    c.strip() for c in os.environ.get("LUMEN_SUPPRESS", "Open Manhole").split(",") if c.strip()
+}
+
+# Classes the multi-class model is not trusted to report, dropped before its
+# detections join the pool. Blanket-disabling the whole model was the wrong cut:
+# measured on 80 held-out images it looked like an improvement (precision 0.769
+# -> 0.911), but it also silenced the model that was carrying the general web
+# photographs. On a textbook asphalt pothole the fine-tune scores 0.156 and on a
+# water-filled one 0.069 — both under threshold — while the multi-class model
+# had them at 0.93. Those are precisely the Google-Images-style uploads this
+# platform is demonstrated with, so losing them is not a win.
+#
+# Only one class is actually broken. "Open Manhole" was trained with its
+# negative examples DISCARDED — train_multi.SOURCE_MAP maps "Good", an intact
+# cover, to None — so all 508 intact covers were dropped instead of being
+# learned as background, and every manhole the model has ever seen was a
+# hazard. It called a closed cover an Open Manhole at 0.80 on CMP-10281 and
+# invented one at 0.34 on a rubbish pile. Suppressed until retrained with those
+# images as hard negatives, which is the same fix that took pothole precision
+# from 0.771 to 0.816.
+UNTRUSTED_MULTICLASS = {
+    c.strip() for c in os.environ.get(
+        "LUMEN_UNTRUSTED_CLASSES",
+        "Open Manhole,Alligator Crack,Overflowing Bin",
+    ).split(",")
+    if c.strip()
+}
+# Which multi-class predictions are fit to show a supervisor. Measured against
+# each source corpus's own ground truth at IoU 0.45, on held-out splits:
+#
+#     Garbage Pile      P 0.825   R 0.732      52/11/19    kept
+#     Alligator Crack   P 0.639   R 0.225      23/13/79    withheld
+#     Overflowing Bin   P 0.500   R 0.444       4/4/5      withheld
+#     Open Manhole        —         —          no held-out split   withheld
+#
+# Alligator Crack walks past three cracks in four, and one box in three that
+# it does draw is wrong. Overflowing Bin is a coin toss. Neither is worth
+# putting in front of someone deciding where to send a repair crew, and a
+# confident wrong class is worse than an honest silence — the complaint still
+# reaches a human, it just is not pre-labelled with a guess.
+#
+# Garbage Pile stays: it is the one non-pothole class that measures well.
+# Remove entries from this set as the multi-class model is retrained and each
+# class earns its place back on evidence.
+
+# Confidence the segmentation model must reach when it is only being asked to
+# trace an outline over a pothole another model already found. Far below its
+# detection bar on purpose: the overlap test is the real filter, so a weak
+# trace is free and a missing one costs a rectangle instead of an outline.
+SEGMENT_TRACE_CONF = float(os.environ.get("LUMEN_SEGMENT_TRACE_CONF", "0.10"))
+
+# A local pothole detector, ahead of everything else.
+#
+# Found by testing eighteen published models against held-out data rather than
+# trusting their advertised figures — three of which claimed 97-100% precision
+# and measured 0.76 or below. This one advertises nothing and wins:
+#
+#     model                   v9 P/R        wide-street P/R
+#     this (Samdutse)         0.75 / 0.70   0.98 / 0.71
+#     hosted qwkkc/2          0.85 / 0.47   0.96 / 0.48
+#     our civic_best.pt       0.73 / 0.30   —
+#
+# At 0.40 it reaches 0.95 precision / 0.81 recall on wide-street photographs,
+# which is the class of image this platform actually receives. 11M parameters,
+# 21MB, runs locally: no API key, no network round trip, and citizen
+# photographs never leave the machine.
+#
+#   huggingface.co/Samdutse/pothole-yolov8
+# SUPERSEDED by models/pothole_best.pt, the LUMEN fine-tune. Measured against
+# each other on 665 held-out images from a corpus neither had trained on:
+#
+#                                precision   recall    F1
+#     Samdutse pothole_local      0.771      0.568    0.654    (via the full pipeline)
+#     LUMEN pothole_best.pt       0.816      0.686    0.745
+#
+# Both metrics moved together, which is what distinguishes a better model from
+# a different operating point on the same curve. mAP50 0.799, mAP50-95 0.434.
+# The gain is credited to 680 hard negatives — manhole covers, open voids,
+# cracked and stained dashcam roads — teaching it what is *not* a pothole.
+#
+# Samdutse stays as the fallback: if the fine-tune is missing, detection
+# degrades to the previous model rather than to nothing.
+FINE_TUNED_WEIGHTS = Path(__file__).resolve().parent / "models" / "pothole_best.pt"
+LOCAL_POTHOLE_WEIGHTS = (FINE_TUNED_WEIGHTS if FINE_TUNED_WEIGHTS.exists()
+                         else WEIGHTS_DIR / "pothole_local.pt")
+
+# 0.25 for the fine-tune, not 0.45. The two models are calibrated differently
+# and the threshold is not portable between them: at 0.50 the fine-tune scores
+# 0.988 precision but 0.182 recall — it would find fewer than one pothole in
+# five. Swapping the weights without moving this number would have made the
+# site substantially worse while every offline metric looked excellent.
+_DEFAULT_LOCAL_CONF = "0.25" if FINE_TUNED_WEIGHTS.exists() else "0.45"
+LOCAL_POTHOLE_CONF = float(os.environ.get("LUMEN_LOCAL_POTHOLE_CONF", _DEFAULT_LOCAL_CONF))
+_local_pothole = None
+_local_pothole_failed = False
+
+# A dedicated Open Manhole detector, replacing the multi-class model's version
+# of that class. The multi-class one was withheld because it called an intact
+# closed cover a fall hazard at 0.80 (CMP-10281): 422 images labelled "Lose"
+# show a cover seated flush in the pavement and were trained as the hazard,
+# contradicting 508 near-identical "Good" covers trained as background.
+#
+# This model was trained on the same corpus with that contradiction removed —
+# Broken and Uncovered are the hazard, Good and Lose are background — giving
+# 314 hazard images against 590 closed-cover negatives. On its held-out split:
+#
+#     precision 0.772   recall 0.848   mAP50 0.854   mAP50-95 0.535
+#
+# That split is a random slice of one corpus, so it is a same-source figure and
+# proves only that the contradiction is gone, not that the model generalises.
+# The test that matters is whether it stays silent on a closed cover.
+MANHOLE_WEIGHTS = Path(__file__).resolve().parent / "models" / "manhole_best.pt"
+MANHOLE_CONF = float(os.environ.get("LUMEN_MANHOLE_CONF", "0.35"))
+_manhole_model = None
+_manhole_failed = False
+
+
+def _manholes(img: np.ndarray, frame_area: float) -> list["Detection"]:
+    """Open Manhole detections from the dedicated model. [] on any failure."""
+    global _manhole_model, _manhole_failed
+    if _manhole_model is None and not _manhole_failed:
+        if not MANHOLE_WEIGHTS.exists():
+            _manhole_failed = True
+        else:
+            try:
+                from ultralytics import YOLO
+                _manhole_model = YOLO(str(MANHOLE_WEIGHTS))
+            except Exception:
+                _manhole_failed = True
+    if _manhole_model is None:
+        return []
+    try:
+        res = _manhole_model.predict(img, conf=MANHOLE_CONF, verbose=False)[0]
+    except Exception:
+        return []
+    out: list[Detection] = []
+    for b in getattr(res, "boxes", []) or []:
+        x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        out.append(Detection(
+            label="Open Manhole", confidence=round(float(b.conf[0]), 4),
+            box=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+            area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
+        ))
+    return out
+
+
+def _local_potholes(img: np.ndarray, frame_area: float) -> list["Detection"]:
+    """Pothole detections from the dedicated local model. [] on any failure."""
+    global _local_pothole, _local_pothole_failed
+    if _local_pothole is None and not _local_pothole_failed:
+        if not LOCAL_POTHOLE_WEIGHTS.exists():
+            _local_pothole_failed = True
+        else:
+            try:
+                from ultralytics import YOLO
+                _local_pothole = YOLO(str(LOCAL_POTHOLE_WEIGHTS))
+            except Exception:
+                _local_pothole_failed = True
+    if _local_pothole is None:
+        return []
+    try:
+        res = _local_pothole.predict(img, conf=LOCAL_POTHOLE_CONF, verbose=False)[0]
+    except Exception:
+        return []
+    out: list[Detection] = []
+    for b in getattr(res, "boxes", []) or []:
+        if "pothole" not in res.names.get(int(b.cls[0]), "").lower():
+            continue
+        x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
+        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        out.append(Detection(
+            label="Pothole", confidence=round(float(b.conf[0]), 4),
+            box=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+            area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
+        ))
+    return out
+
+# A Roboflow-hosted pothole model, used only when ROBOFLOW_API_KEY is set.
+# Off by default and never fatal: every failure path in roboflow_detect returns
+# [], so a missing key, a dead network or a slow API degrades to the local
+# models rather than breaking an upload.
+#
+# Two things to weigh before enabling for real complaints. Each detection
+# becomes a network round trip, so uploads are subject to internet latency. And
+# citizen photographs leave the machine, which for a municipal deployment is a
+# data-protection decision rather than a technical one.
+ROBOFLOW_MIN_CONF = float(os.environ.get("ROBOFLOW_MIN_CONF", "0.50"))
+_roboflow = None
+
+
+def _roboflow_enabled() -> bool:
+    """Import lazily so the service still starts if the module is absent."""
+    global _roboflow
+    if _roboflow is None:
+        try:
+            import roboflow_detect as rf
+            _roboflow = rf
+        except Exception:
+            return False
+    return _roboflow.is_configured()
 
 # Raw model label -> taxonomy label (RDD2022 codes etc.)
 RDD_CLASSES = TAX.RDD_ALIASES
@@ -96,12 +329,18 @@ _OCCLUDER_COCO_IDS = {
 # treated as not being of a road or civic area at all.
 MIN_ROAD_FRACTION = 0.08
 
-# A photograph of a real surface always carries texture. Measured across 98
-# genuine civic photographs the lowest edge density was 0.026; a cartoon face
-# scores 0.005 and a drawn robot 0.007. Flat synthetic images otherwise slip
-# past the colour rule, because a grey figure on a pale background looks
-# exactly like asphalt to a saturation test.
-MIN_EDGE_DENSITY = 0.015
+# A photograph of a real surface always carries texture. Flat synthetic images
+# otherwise slip past the colour rule, because a grey figure on a pale
+# background looks exactly like asphalt to a saturation test.
+#
+# 0.003, down from 0.015. The old figure came from a sample whose lowest civic
+# photograph scored 0.026, and it was safe while this was advisory. It stopped
+# being safe when the scene check became a gate that refuses an upload outright:
+# across 120 pothole photographs the fifth percentile is 0.038 but the minimum
+# is 0.0069 — smooth concrete in flat, shadowless light — and five real roads
+# with real potholes were being turned away as "too flat". A blank fill scores
+# exactly 0.0000, so the floor only has to clear zero to do its job.
+MIN_EDGE_DENSITY = 0.003
 
 # COCO classes whose presence, at size, means the photograph is of a subject
 # rather than of a place. Vehicles are excluded here on purpose — a car in
@@ -138,7 +377,22 @@ _NON_CIVIC_COCO_IDS = {
 # Sample was 23 images / 50 potholes, so 0.900 is 18 of 20 boxes and the true
 # figure could sit anywhere from roughly 0.77 to 0.97. Re-measure once there is
 # a larger held-out set of app-domain photos.
-DEFAULT_CONF = 0.50
+# 0.25, because the weights changed underneath this number. Everything above
+# was swept on civic_best.pt; models/pothole_best.pt is calibrated lower, and a
+# threshold is a property of a particular model's score distribution, not a
+# portable setting. Swept on the 665 held-out images it has never seen:
+#
+#     conf   precision   recall    F1
+#     0.25     0.816      0.686    0.745   <- best F1
+#     0.40     0.965      0.417    0.582
+#     0.50     0.988      0.182    0.307
+#
+# At 0.50 it is right about almost everything it reports and reports almost
+# nothing — four potholes in five go unfound, and a third of pothole
+# photographs come back "no potholes detected". That is a worse failure for a
+# complaints queue than the occasional wrong box, because a missed defect is
+# never triaged at all. Overridable per request, as the brief requires.
+DEFAULT_CONF = float(os.environ.get("LUMEN_DEFAULT_CONF", "0.25"))
 
 # Detections recovered from the tiled fallback must clear this to be reported.
 # Higher than the normal threshold on purpose: see the note where it is used.
@@ -169,6 +423,14 @@ TILED_MIN_CONF = 0.70
 # Set either to "1" to re-enable. Turn tiles back on first if recall matters
 # more than the ninth correct box in ten.
 USE_AUGMENTING_TILES = os.environ.get("LUMEN_AUGMENTING_TILES", "0") == "1"
+# Off. It runs only when every trained model has found nothing, and "nothing"
+# is usually the right answer — an intact road. What it does instead is
+# threshold the dark pixels and call the blobs potholes, which is how a clear
+# stretch of Brigade Road acquired two potholes at 0.667 and 0.604 confidence
+# (CMP-10361) after all four models correctly stayed silent. Measured earlier:
+# 11 boxes on a held-out set, 1 of them correct, including a 0.61 box on a
+# puddle. A confident wrong answer is worse than an honest empty one, and the
+# three-state validation now has an honest empty answer to give.
 USE_CLASSICAL_FALLBACK = os.environ.get("LUMEN_CLASSICAL_FALLBACK", "0") == "1"
 
 # Detector selection when no fine-tuned weights are present:
@@ -393,7 +655,7 @@ def _contained(inner: list[float], outer: list[float]) -> float:
 
 
 def _merge_overlapping(dets: list["Detection"], frame_area: float,
-                       iou_thresh: float = 0.30, contain_thresh: float = 0.55,
+                       iou_thresh: float = 0.75, contain_thresh: float = 0.90,
                        gap_px: float = 8.0) -> list["Detection"]:
     """Collapse every box covering one defect into a single box.
 
@@ -411,11 +673,36 @@ def _merge_overlapping(dets: list["Detection"], frame_area: float,
     than a pair at a time. The merged box keeps the highest confidence of its
     parts — the best evidence for the defect, not an average diluted by the
     weak fragments that overlapped it.
+
+    The thresholds are 0.75 IoU and 0.90 containment — "the same box twice",
+    not "two boxes near each other". They were 0.30 and 0.55, which is a
+    neighbour rule, and it was written when the tiled pass was on and a single
+    pothole genuinely arrived as several fragments from adjacent tiles. Tiles
+    are off by default now, so what those thresholds actually did was fuse
+    distinct potholes lying next to each other on the same stretch of road.
+    That loses a real defect twice over: the union box matches one ground-truth
+    pothole and its neighbour is scored a miss, and the display shows one large
+    region where a supervisor should see two. Measured over 40 held-out images
+    the pipeline emitted 58 boxes where the model produced 83.
     """
+    if not UNION_MERGE:
+        # Suppression instead of union. Unioning existed to reassemble one
+        # pothole that arrived as several fragments from adjacent tiles, and
+        # the tiled pass is off by default now, so what remained was a rule
+        # that fused genuinely separate potholes into one region — which the
+        # brief forbids outright. Measured over 80 held-out images:
+        #
+        #     union merge     precision 0.741   recall 0.678
+        #     NMS only        precision 0.769   recall 0.724
+        #
+        # Better on both axes, and two adjacent potholes stay two.
+        return _nms(dets)
+
     boxes = [
         {"label": d.label, "conf": d.confidence,
          "x1": min(d.box[0], d.box[2]), "y1": min(d.box[1], d.box[3]),
-         "x2": max(d.box[0], d.box[2]), "y2": max(d.box[1], d.box[3])}
+         "x2": max(d.box[0], d.box[2]), "y2": max(d.box[1], d.box[3]),
+         "polygon": d.polygon}
         for d in dets
     ]
 
@@ -434,14 +721,28 @@ def _merge_overlapping(dets: list["Detection"], frame_area: float,
                 ak = (k["x2"] - k["x1"]) * (k["y2"] - k["y1"])
                 iou = inter / (ab + ak - inter + 1e-6)
                 contained = inter / (min(ab, ak) + 1e-6)
-                touching = (
-                    b["x1"] - gap_px < k["x2"] and k["x1"] - gap_px < b["x2"] and
-                    b["y1"] - gap_px < k["y2"] and k["y1"] - gap_px < b["y2"]
-                )
-                if iou > iou_thresh or contained > contain_thresh or touching:
+                # "Near enough to touch" is deliberately NOT a merge rule.
+                #
+                # It was added for tiled inference, where one pothole split
+                # across a tile seam comes back as two abutting boxes. But the
+                # test chains: A touches B, B touches C, and a road with many
+                # potholes close together collapses into a single box. On one
+                # test photograph a detector found fifteen potholes correctly
+                # and this rule merged all fifteen into one.
+                #
+                # Real overlap — IoU or containment — is the honest signal that
+                # two boxes describe one defect. Adjacency is not: two potholes
+                # a hand's width apart are two potholes.
+                if iou > iou_thresh or contained > contain_thresh:
                     k["x1"], k["y1"] = min(k["x1"], b["x1"]), min(k["y1"], b["y1"])
                     k["x2"], k["y2"] = max(k["x2"], b["x2"]), max(k["y2"], b["y2"])
-                    k["conf"] = max(k["conf"], b["conf"])
+                    if b["conf"] > k["conf"]:
+                        k["conf"] = b["conf"]
+                        if b["polygon"] is not None:
+                            k["polygon"] = b["polygon"]
+                    else:
+                        if k["polygon"] is None and b["polygon"] is not None:
+                            k["polygon"] = b["polygon"]
                     changed = True
                     break
             else:
@@ -453,10 +754,80 @@ def _merge_overlapping(dets: list["Detection"], frame_area: float,
             label=b["label"], confidence=round(b["conf"], 3),
             box=[b["x1"], b["y1"], b["x2"], b["y2"]],
             area_ratio=round(((b["x2"] - b["x1"]) * (b["y2"] - b["y1"])) / max(frame_area, 1.0), 4),
+            polygon=b["polygon"],
         )
         for b in boxes
     ]
     return sorted(merged, key=lambda d: -d.confidence)
+
+
+def _arbitrate_classes(dets: list["Detection"],
+                       thresh: float = 0.30) -> list["Detection"]:
+    """Resolve two different classes claiming the same pixels.
+
+    Three specialists now run on every image — the pothole model, the manhole
+    model and the multi-class civic model — and none of them knows the others
+    exist. Each is confident within its own world, so a dark circular patch of
+    tarmac is a pothole to one and an open manhole to the other, and both
+    report it. The result is a complaint showing "POTHOLE 1" and "Open Manhole"
+    stacked on the same hole.
+
+    They cannot both be right about one object, so the more confident reading
+    wins and the other is dropped. Suppression is deliberately limited to boxes
+    that genuinely overlap: two different defects in different parts of a
+    photograph are ordinary — a street can have a pothole near an open manhole,
+    and a rubbish pile beside a broken kerb — and dropping one of those would
+    lose a real complaint to tidy up a display.
+
+    Measured on the live queue: 21 of 111 complaints showed more than one
+    class, but only 9 box pairs actually overlapped. This touches those 9.
+    """
+    if len(dets) < 2:
+        return dets
+
+    # Confidence alone decides most conflicts, but not this one. Two models
+    # trained separately do not share a confidence scale, and for potholes
+    # against open manholes the louder model is reliably the wrong one.
+    #
+    # Sampled every complaint where both models fired on the same object and
+    # looked at the photographs: all six were genuine manholes — round road
+    # openings, a broken cover, drain grates, a displaced slab — and in every
+    # one the pothole model was the more confident of the two:
+    #
+    #     manhole model   0.57  0.60  0.60  0.70  0.78  0.78
+    #     pothole model   0.70  0.80  0.80  0.80  0.85  0.85
+    #
+    # So confidence ranks this pair backwards. The pothole model was trained
+    # with manhole covers as hard negatives — taught to ignore them, never to
+    # recognise them — so when it fires on one anyway it is a known failure of
+    # that training, not evidence. The manhole model is the only one that has
+    # ever been shown a cover and asked whether it is open. On this pair it
+    # wins on standing rather than on volume.
+    specialist_wins = {("Pothole", "Open Manhole")}
+    for i, a in enumerate(dets):
+        for j, b in enumerate(dets):
+            if i == j or (a.label, b.label) not in specialist_wins:
+                continue
+            if _iou(a.box, b.box) > thresh or _contained(a.box, b.box) > 0.70 \
+               or _contained(b.box, a.box) > 0.70:
+                return _arbitrate_classes(
+                    [d for k, d in enumerate(dets) if k != i], thresh)
+
+    order = sorted(range(len(dets)), key=lambda i: -dets[i].confidence)
+    dropped: set[int] = set()
+    for rank, i in enumerate(order):
+        if i in dropped:
+            continue
+        for j in order[rank + 1:]:
+            if j in dropped or dets[j].label == dets[i].label:
+                continue
+            # Containment counts as well as IoU: a small box sitting inside a
+            # much larger one of another class is the same object read twice,
+            # and their IoU is low precisely because the sizes differ.
+            if _iou(dets[i].box, dets[j].box) > thresh or \
+               _contained(dets[j].box, dets[i].box) > 0.70:
+                dropped.add(j)
+    return [d for k, d in enumerate(dets) if k not in dropped]
 
 
 def _nms(dets: list["Detection"], thresh: float = 0.45) -> list["Detection"]:
@@ -593,6 +964,21 @@ def assess_scene(img: np.ndarray, *, want: str = "road") -> dict:
     street_share = street_area / frame
     off_topic_share = off_topic_area / frame
 
+    # Where is this, as a place? A 365-way scene classifier answers what colour
+    # and texture cannot: a document scan and a strip of asphalt have almost
+    # identical road-mask fractions, and random noise scores higher than most
+    # real roads. This only ever rejects — see scene_classifier for why asking
+    # it to confirm a road instead would throw away correct complaints.
+    interior = False
+    interior_scene = ""
+    try:
+        reading = scene_classifier.classify(img)
+        if reading is not None:
+            interior = bool(reading["looks_interior"])
+            interior_scene = reading["top_scene"].replace("_", " ").split("/")[0]
+    except Exception:
+        pass
+
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     edge_density = float((cv2.Canny(gray, 70, 180) > 0).sum()) / frame
     # 0.45, not 0.30: coarse gravel is a real surface and reaches 0.364.
@@ -604,15 +990,27 @@ def assess_scene(img: np.ndarray, *, want: str = "road") -> dict:
     dominated = off_topic_share > 0.18 and off_topic_share > street_share
 
     if want == "urban":
-        # A street scene qualifies on ground or on street furniture: a photo
-        # framed on a bus or a traffic light is still a street.
-        has_place = ground_fraction >= 0.20 or street_share >= 0.02
+        # Failing to find a place is not evidence of an irrelevant photograph.
+        # A skip full of rubbish bags photographed from two feet away shows no
+        # ground and no street furniture, and it is a real complaint — refusing
+        # those was the largest single source of wrong rejections in the live
+        # queue. So an urban verdict rests on positive evidence of irrelevance
+        # — an interior, an off-topic subject, a flat or incoherent image —
+        # rather than on failure to prove a road is present.
+        has_place = True
     else:
         # Pothole analysis needs a surface to analyse, so the bar is the ground
-        # itself rather than anything in the scene.
-        has_place = ground_fraction >= 0.45
+        # itself — or unambiguous street furniture, because a photograph framed
+        # on a bus or a queue of traffic is still taken on a road even when the
+        # vehicles leave little tarmac visible. Measured: 60 road and complaint
+        # photographs all clear the ground bar with a median of 1.00, while a
+        # street scene with a bus filling the frame reaches only 0.42 and was
+        # being refused. The ground bar alone rejects nothing that matters —
+        # both scanned documents cleared it at 0.64 and 0.77, and it is the
+        # scene classifier that catches those.
+        has_place = ground_fraction >= 0.45 or street_share >= 0.08
 
-    ok = has_place and not dominated and not incoherent and not featureless
+    ok = has_place and not dominated and not incoherent and not featureless and not interior
 
     return {
         "road_fraction": round(road_fraction, 4),
@@ -620,9 +1018,11 @@ def assess_scene(img: np.ndarray, *, want: str = "road") -> dict:
         "edge_density": round(edge_density, 4),
         "street_share": round(street_share, 4),
         "off_topic_share": round(off_topic_share, 4),
+        "interior_scene": interior_scene if interior else "",
         "looks_civic": ok,
         "reason": (
-            f"the photograph is mostly of a {subjects[0]}, not a place" if dominated and subjects
+            f"this looks like a {interior_scene}, which is indoors" if interior
+            else f"the photograph is mostly of a {subjects[0]}, not a place" if dominated and subjects
             else "the photograph is of an object, not a place" if dominated
             else "not a photograph of a surface — no coherent texture" if incoherent
             else "too flat to be a photograph of a real surface" if featureless
@@ -633,23 +1033,234 @@ def assess_scene(img: np.ndarray, *, want: str = "road") -> dict:
 
 
 def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
-    """Run detection and return structured results plus an annotated image."""
+    """Run detection and return structured results plus an annotated image.
+
+    Three outcomes, and the caller needs to tell them apart:
+
+      INVALID_IMAGE          not a road scene. Nothing is detected, nothing is
+                             drawn, and no count is reported — "0 potholes" on a
+                             photograph of lunch is a wrong answer, not an empty
+                             one.
+      VALID_ROAD_NO_POTHOLE  a road, with no damage above the threshold.
+      VALID_ROAD             a road, with damage.
+    """
     img = _read_image(data)
     h, w = img.shape[:2]
     frame_area = float(h * w)
     mode = get_mode()
+
+    # Relevance first, before any damage model runs.
+    #
+    # assess_scene decides this on evidence independent of the pothole
+    # detector: an HSV road-surface segmentation weighted to the lower half of
+    # the frame, a pretrained COCO detector reading the subject of the
+    # photograph, and edge statistics that catch screenshots and flat synthetic
+    # images. It has to be independent — a detector asked "are there potholes
+    # here" cannot answer "is this even a road", because silence from it is
+    # ambiguous between an intact road and a picture of a cat.
+    # "urban", not "road": LUMEN files rubbish piles and open manholes as well
+    # as potholes, and those are photographed close up with little tarmac in
+    # frame. Measured over 400 queue photographs the road bar refused 55 and
+    # the urban bar 45, while both refused every document, portrait and
+    # interior — so the stricter setting was costing real complaints and
+    # catching nothing extra. What rejects an irrelevant upload is the scene
+    # classifier and the COCO subject check, neither of which this affects.
+    scene = assess_scene(img, want="urban")
+    if not scene["looks_civic"]:
+        return {
+            "model_mode": mode,
+            "detector": "REJECTED",
+            "image_size": {"width": w, "height": h},
+            "valid_image": False,
+            "image_type": "unrelated",
+            "potholes_detected": False,
+            "count": 0,
+            "message": "Please upload an appropriate road image for pothole detection.",
+            "hint": ("Upload a clear image of a road, street, pavement, parking area, "
+                     "or other road surface."),
+            "detections": [],
+            "severity": score_severity([]),
+            "routing": route_from_detections([]),
+            "scene": scene,
+            # The photograph is returned untouched: no box, no mask, no label.
+            "annotated_png_b64": _to_b64_png(img),
+        }
 
     detector = mode
     if mode == "HEURISTIC":
         dets = heuristic_detect(img)
     else:
         model, _ = get_model()
-        # _predict returns raw YOLO boxes. A single large pothole routinely
-        # comes back as two or three stacked boxes, which reads as several
-        # potholes and makes the annotated image useless as evidence. Merge
-        # before anything else looks at them — this used to happen only inside
-        # the tiled branch below, so the plain whole-frame path never got it.
-        dets = _merge_overlapping(_predict(model, img, conf, frame_area), frame_area)
+        # The multi-class civic model. It is the only detector here that has
+        # never been retrained with hard negatives, and it shows: on CMP-10272,
+        # a photograph of a rubbish pile, it reported "Open Manhole" at 0.34 and
+        # a "Pothole" covering 0.4% of the frame, and on CMP-10281 it called an
+        # intact closed manhole cover an Open Manhole at 0.80. The cause is
+        # known — train_multi.SOURCE_MAP maps "Good" (an intact cover) to None,
+        # which drops those 508 images instead of training on them as
+        # background, so every manhole it has ever seen was a positive example.
+        #
+        # Off for new complaints until it is retrained. THE COST IS REAL: with
+        # it off nothing detects garbage piles, overflowing bins, open manholes
+        # or alligator cracks, so those complaints record zero detections and
+        # route as Unclassified. Potholes are unaffected — they come from
+        # models/pothole_best.pt, which was retrained.
+        main_dets = ([d for d in _predict(model, img, conf, frame_area)
+                      if d.label not in UNTRUSTED_MULTICLASS]
+                     if USE_MULTICLASS_MODEL else [])
+
+        # The segmentation specialist no longer contributes detections of its
+        # own — it only traces an outline over a pothole another model already
+        # found (that pass runs further down).
+        #
+        # It used to lead, and that was right when the primary detector found
+        # 18% of potholes and the specialist raised it to 62%. It is wrong now.
+        # Audited on CMP-10361, a clear road with no pothole in it:
+        #
+        #     pothole_best.pt (primary)   no detection — correct
+        #     specialist                  one "pothole", conf 0.506,
+        #                                 711x440 px, 56% of the frame,
+        #                                 covering road, trees, sky and traffic
+        #
+        # The mask was not mis-scaled: its polygon spans x 7-717 against its own
+        # box at 6-717, it fills 93% of that box, and Ultralytics' own
+        # result.plot() draws the identical blob. The prediction itself is
+        # simply wrong, and at 0.506 it cleared the 0.50 bar by six thousandths.
+        # A second opinion that invents whole-frame potholes is worse than no
+        # second opinion, so it is demoted to what it is good at: outlining.
+        specialist_active = False
+        special_dets = []
+        if USE_POTHOLE_SPECIALIST and SPECIALIST_CONTRIBUTES_DETECTIONS:
+            special_dets = _specialist_potholes(img, frame_area)
+            if special_dets:
+                specialist_active = True
+                detector = "TRAINED+SPECIALIST"
+
+        # A hosted pothole model, when one is configured. Measured on 50
+        # wide-street photographs that none of these models were trained on:
+        #
+        #     detector                     precision  recall
+        #     local pipeline                   0.72    0.31
+        #     hosted qwkkc/2 @0.50             0.96    0.48
+        #     hosted qwkkc/2 @0.30             0.88    0.71
+        #
+        # Better on both axes, so it leads and the local models fill in behind
+        # it. Its box sizes are sane too — median 5-8% of the frame against a
+        # ground truth of 2%, where the same project's v5 model returned the
+        # entire image every time and still advertised 100% precision.
+        remote_dets: list[Detection] = []
+        if _roboflow_enabled():
+            for r in _roboflow.detect(data, conf=ROBOFLOW_MIN_CONF):
+                x1, y1, x2, y2 = r["box"]
+                area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+                remote_dets.append(Detection(
+                    label="Pothole", confidence=r["confidence"],
+                    box=[x1, y1, x2, y2],
+                    area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
+                ))
+            if remote_dets:
+                detector = "HOSTED+TRAINED" if main_dets else "HOSTED"
+
+        local_pot = _local_potholes(img, frame_area)
+        if local_pot:
+            detector = "LOCAL-POTHOLE" if not main_dets else "TRAINED+LOCAL-POTHOLE"
+
+        # Open Manhole comes from its own model now. The class is withheld from
+        # the multi-class detector (see UNTRUSTED_MULTICLASS), so this is the
+        # only source of it, and it is the retrained one that treats a closed
+        # cover as background rather than as a hazard.
+        manholes = _manholes(img, frame_area)
+        if manholes:
+            detector = detector + "+MANHOLE" if detector else "MANHOLE"
+
+        dets = _merge_overlapping(
+            local_pot + manholes + remote_dets + main_dets + special_dets, frame_area)
+        dets = _arbitrate_classes(dets)
+
+        # Give every pothole its true outline.
+        #
+        # A pothole is an irregular blob. A rectangle around one looks crude and
+        # overstates its plan area, which then propagates into the volume and
+        # the cost estimate, since both are derived from it.
+        #
+        # Detection and shape are separate jobs here, deliberately. Whichever
+        # model found the pothole keeps the credit — its confidence, and the
+        # decision that there is a pothole at all — and the segmentation model
+        # is asked only for geometry over the region already found. So the
+        # quality of the outline does not depend on the segmentation model's
+        # recall: it never has to find anything, only trace what is handed to
+        # it. That matters because the hosted detector is the stronger finder
+        # (0.79 precision / 0.47 recall) but returns boxes only, while the
+        # segmentation model traces well and finds poorly (0.70 / 0.20).
+        #
+        # Anything the segmentation model has no opinion on keeps its box,
+        # rather than being given an outline it has not earned.
+        # Open Manhole is offered to the tracer as well as Pothole. The tracer
+        # is a pothole segmentation model, so it has no idea what a manhole is
+        # and only recognises about one in three of them — but an outline it
+        # does find is a genuine trace of the exposed cavity, which is a better
+        # thing to show a supervisor than a rectangle around the whole cover.
+        # Anything it cannot trace keeps its box, exactly as an untraceable
+        # pothole already does.
+        _TRACEABLE = {"Pothole", "Open Manhole"}
+        if any(d.label in _TRACEABLE and not d.polygon for d in dets):
+            # Asked at a much lower threshold than when it is used to detect.
+            # A shape that overlaps nothing already found is discarded below,
+            # so a weak trace costs nothing and a missing one costs an outline.
+            # At its detection bar of 0.50 it traces only 3 potholes in 5.
+            _prev = globals()["SPECIALIST_MIN_CONF"]
+            globals()["SPECIALIST_MIN_CONF"] = SEGMENT_TRACE_CONF
+            try:
+                outlines = _specialist_potholes(img, frame_area)
+            finally:
+                globals()["SPECIALIST_MIN_CONF"] = _prev
+            traced = 0
+            for i, d in enumerate(dets):
+                if d.label not in _TRACEABLE or d.polygon:
+                    continue
+                match = max(
+                    (s for s in outlines
+                     if _iou(s.box, d.box) > 0.30 or _contained(d.box, s.box) > 0.55),
+                    key=lambda s: _iou(s.box, d.box), default=None,
+                )
+                if match is not None and match.polygon:
+                    # An outline is accepted only if it is plausibly the shape
+                    # of THIS pothole. The overlap test above is not enough on
+                    # its own: a blob covering half the frame contains the real
+                    # pothole, passes containment, and would then replace a
+                    # tight box with itself. CMP-10361 is that case — a 711x440
+                    # region at 56% of the frame swallowing road, trees and
+                    # traffic.
+                    #
+                    # So the outline must not be dramatically larger than the
+                    # detection it claims to describe. Ground truth says a
+                    # pothole occupies a median 2.8% of the frame and 96% sit
+                    # under 40%, so a trace 2.5x the area of its own detection
+                    # is not that pothole's boundary — it is a different, larger
+                    # thing, and the detection keeps its box.
+                    d_area = max(1.0, (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]))
+                    m_area = max(0.0, (match.box[2] - match.box[0]) * (match.box[3] - match.box[1]))
+                    if m_area > 2.5 * d_area or m_area / frame_area > 0.40:
+                        continue
+                    # The detection keeps its OWN box. Only the outline is
+                    # borrowed. Taking match.box as well handed localisation
+                    # back to the model that is worse at it: the segmentation
+                    # specialist traces well but localises loosely, and
+                    # overwriting a tight box with its looser one moved the
+                    # box off the pothole just enough to miss at IoU 0.45.
+                    # Position is the detector's job, shape is the tracer's.
+                    dets[i] = Detection(
+                        # d.label, not a hardcoded "Pothole" — the tracer only
+                        # supplies geometry, and now that Open Manhole is also
+                        # offered to it, hardcoding would silently relabel a
+                        # traced manhole as a pothole.
+                        label=d.label, confidence=d.confidence,
+                        box=d.box, area_ratio=d.area_ratio,
+                        polygon=match.polygon,
+                    )
+                    traced += 1
+            if traced:
+                detector += "+SEGMENTED"
 
         # A whole-frame pass reliably finds the nearest, largest defect and
         # routinely misses the smaller ones further up the road — they occupy
@@ -676,7 +1287,7 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
                 merged = _merge_overlapping(dets + extra, frame_area)
                 if len(merged) > len(dets):
                     dets = merged
-                    detector = "TRAINED+TILED"
+                    detector = "TRAINED+SPECIALIST+TILED" if specialist_active else "TRAINED+TILED"
         # A wide street photograph puts each defect in a handful of pixels once
         # the frame is squeezed to the network's input size, and the detector
         # then reports nothing at all — the training photographs are close
@@ -699,19 +1310,18 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
             # department is worse than sending it to a human: "no damage
             # detected — manual triage required" is a correct answer, a
             # confident wrong class is not.
-            dets = [d for d in _predict_tiled(model, img, conf, frame_area)
-                    if d.confidence >= TILED_MIN_CONF]
-            if dets:
-                detector = "TRAINED+TILED"
-
-        # Nothing found across the whole frame or the tiles. Before giving up,
-        # ask the pothole specialist — see SPECIALIST_WEIGHTS above for why this
-        # is worth a second inference and why its bar is higher.
-        if not dets:
-            special = _specialist_potholes(img, frame_area)
-            if special:
-                dets = special
-                detector = "TRAINED+SPECIALIST"
+            # Gated on the same switch as the whole-frame pass: this re-runs the
+            # multi-class model, so leaving it open would have let the model in
+            # through the back door on exactly the images where the front door
+            # found nothing. That is how an intact manhole cover was still being
+            # called an Open Manhole at 0.80 with the multi-class detector
+            # supposedly disabled.
+            if USE_MULTICLASS_MODEL:
+                dets = [d for d in _predict_tiled(model, img, conf, frame_area)
+                        if d.confidence >= TILED_MIN_CONF
+                        and d.label not in UNTRUSTED_MULTICLASS]
+                if dets:
+                    detector = "TRAINED+TILED"
 
         # Last resort: the classical detector, only when explicitly enabled.
         #
@@ -731,6 +1341,95 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
                 dets = fallback
                 detector = "CLASSICAL_FALLBACK"
 
+        # Filter out road-damage false positives (sky/leaves/people)
+        if dets:
+            road = _road_mask(img)
+            road_fraction = float((road > 0).sum()) / frame_area
+            people_boxes = _person_boxes(img)
+            
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 70, 180)
+            
+            filtered_dets = []
+            for d in dets:
+                x1, y1, x2, y2 = [int(v) for v in d.box]
+
+                # Potholes come through as the fine-tuned model reported them.
+                # Measured on 80 held-out images, these filters cost more than
+                # they save now that the detector is the one deciding:
+                #
+                #     pothole_best.pt raw      precision 0.779   recall 0.763
+                #     after these filters      precision 0.748   recall 0.645
+                #
+                # They were written when the pothole detections came from a
+                # weaker model that genuinely did box sky and foliage. This one
+                # does not: on CMP-10361, the clear road that everything else
+                # got wrong, it reported nothing at all. Suppressing a correct
+                # detector to catch mistakes it no longer makes loses one real
+                # pothole in eight and buys three points of precision.
+                #
+                # The other classes keep the filters — the multi-class model
+                # has not been retrained and still needs them.
+                if RAW_POTHOLE_PASSTHROUGH and d.label == "Pothole":
+                    # Two plausibility checks survive the passthrough, because
+                    # neither is a guess about texture — both are checkable.
+                    #
+                    # 1. Size. Across 2,590 ground-truth potholes the largest
+                    #    covered 85.2% of its frame, the 99th percentile 66%
+                    #    and the median 2.8%. A "pothole" filling 91% of the
+                    #    image is outside anything a pothole has ever looked
+                    #    like in this data, so it is not one.
+                    if d.area_ratio > 0.85:
+                        continue
+                    # 2. A more confident reading of the same pixels. On
+                    #    CMP-10357 the multi-class model called the frame a
+                    #    Garbage Pile at 0.816 and the pothole model called the
+                    #    same region a pothole at 0.723. Both cannot be right,
+                    #    and the stronger, more specific reading wins. This
+                    #    fires only on near-total overlap with a higher
+                    #    confidence non-road class — not on a pothole that
+                    #    merely happens to sit near a bin.
+                    if any(o.label != "Pothole" and o.confidence > d.confidence
+                           and TAX.category_of(o.label) != "ROADS"
+                           and _iou(d.box, o.box) > 0.60
+                           for o in dets):
+                        continue
+                    filtered_dets.append(d)
+                    continue
+
+                # Person constraint to avoid classifying people as damage/bins
+                overlaps_person = False
+                for p_box in people_boxes:
+                    if _box_intersection_ratio(d.box, p_box) > 0.4:
+                        overlaps_person = True
+                        break
+                if overlaps_person:
+                    continue
+                    
+                # Road surface constraint for road damages
+                if d.label in ["Pothole", "Alligator Crack"]:
+                    coverage = _road_coverage(road, x1, y1, x2 - x1, y2 - y1)
+                    if road_fraction >= 0.05 and coverage < 0.15:
+                        continue
+                        
+                # A polygon edge-density rule used to sit here, rejecting any
+                # pothole whose outline contained more than 20% edge pixels, to
+                # filter leaves and textured noise. Measured on 29 traced
+                # detections it does not discriminate:
+                #
+                #     real potholes     median edge density 0.307
+                #     false positives   median edge density 0.294
+                #
+                # Broken asphalt IS high-frequency texture, so the rule deleted
+                # 16 of 22 correct detections to remove 6 of 7 wrong ones. It
+                # only fired once an outline existed, so tracing a pothole made
+                # it likelier to be discarded. Removed rather than retuned:
+                # the distributions overlap almost exactly, so no threshold
+                # separates them.
+                            
+                filtered_dets.append(d)
+            dets = filtered_dets
+
     # Is this a photograph of a place at all?
     #
     # Only worth asking when nothing was found. If the detector located civic
@@ -742,12 +1441,6 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
     # user needs to be told which: a road with no damage on it, or a photograph
     # that is not of a road. "No damage detected" is useless advice to someone
     # who uploaded a picture of a robot.
-    scene = (
-        {"road_fraction": None, "edge_density": None, "looks_civic": True,
-         "reason": "civic damage detected in the photograph"}
-        if dets else assess_scene(img)
-    )
-
     annotated = _annotate(img, dets)
     severity = score_severity(dets)
 
@@ -761,8 +1454,22 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
         item["category"] = TAX.category_of(d.label)
         payload.append(item)
 
+    potholes = [d for d in dets if d.label == "Pothole"]
     return {
         "model_mode": mode,
+        # The scene passed the relevance gate above, so the image is a road
+        # either way. What separates the two valid states is only whether the
+        # detector found damage — which is a finding, not a rejection.
+        "valid_image": True,
+        "image_type": "road",
+        "potholes_detected": bool(potholes),
+        "count": len(potholes),
+        # Per-class tally, matching the numbering drawn on the image: three
+        # potholes and a bin read {"Pothole": 3, "Overflowing Bin": 1}. `count`
+        # stays pothole-only because that is what the pothole flow reports.
+        "counts": {label: sum(1 for d in dets if d.label == label)
+                   for label in sorted({d.label for d in dets})},
+        "message": (None if potholes else "No potholes detected in this image."),
         # Which stage actually produced these boxes: the trained model, the
         # tiled re-run, or the classical detector. Surfaced so a low-confidence
         # fallback result is never mistaken for a confident model prediction.
@@ -830,9 +1537,10 @@ def _road_mask(img: np.ndarray) -> np.ndarray:
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     H, S, V = cv2.split(hsv)
 
-    grey = ((S < 70) & (V > 45) & (V < 205)).astype(np.uint8)       # asphalt
+    grey = ((S < 70) & (V > 45) & (V < 256)).astype(np.uint8)       # asphalt
     veg = ((H > 30) & (H < 95) & (S > 55)).astype(np.uint8)          # vegetation
-    sky = ((V > 175) & (S < 55)).astype(np.uint8)                    # bright sky
+    sky = ((V > 200) & (S < 35)).astype(np.uint8)                    # bright sky
+    sky[int(0.65 * h):, :] = 0                                       # sky can never be at the bottom
 
     road = grey.copy()
     road[veg > 0] = 0
@@ -921,6 +1629,41 @@ def _structure_overlap(mask: np.ndarray, x: int, y: int, bw: int, bh: int) -> fl
 def _road_coverage(mask: np.ndarray, x: int, y: int, bw: int, bh: int) -> float:
     sub = mask[y:y + bh, x:x + bw]
     return float((sub > 0).mean()) if sub.size else 0.0
+
+
+def _person_boxes(img: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Get bounding boxes of all detected people in the image."""
+    m = _get_occluder_model()
+    if m is None:
+        return []
+    try:
+        res = m.predict(img, verbose=False, conf=0.25)[0]
+    except Exception:
+        return []
+    out: list[tuple[int, int, int, int]] = []
+    for box in getattr(res, "boxes", []) or []:
+        cid = int(box.cls[0])
+        if cid == 0:  # person
+            x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+            out.append((int(x1), int(y1), int(x2), int(y2)))
+    return out
+
+
+def _box_intersection_ratio(box_a: list[float], box_b: tuple[int, int, int, int]) -> float:
+    """Calculate what fraction of box_a is covered by box_b."""
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter_area = iw * ih
+    if inter_area <= 0:
+        return 0.0
+        
+    a_area = (ax2 - ax1) * (ay2 - ay1)
+    return inter_area / a_area if a_area > 0 else 0.0
 
 
 
@@ -1024,16 +1767,20 @@ def _annotate(img: np.ndarray, dets: list[Detection]) -> np.ndarray:
     reported, which is by size, so the numbering matches the table beneath.
     """
     out = img.copy()
-    pothole_n = 0
+    # Numbered per class, not across the frame: two potholes and an open
+    # manhole read as "Pothole 1", "Pothole 2", "Open Manhole 1" rather than
+    # 1, 2, 3. A supervisor counting potholes should not have to subtract the
+    # manhole from the numbering to get the count.
+    seen: dict[str, int] = {}
     for d in dets:
         x1, y1, x2, y2 = [int(v) for v in d.box]
         colour = TAX.colour_of(d.label)          # one colour per civic category
 
-        if d.label == "Pothole":
-            pothole_n += 1
-            tag = f"POTHOLE {pothole_n}  {d.confidence:.2f}"
-        else:
-            tag = f"{d.label} {d.confidence:.2f}"
+        seen[d.label] = seen.get(d.label, 0) + 1
+        # Percent, not a 0-1 decimal: "72%" is read correctly by someone who
+        # has never seen a confidence score, "0.72" invites being read as a
+        # measurement of the pothole.
+        tag = f"{d.label.upper()} {seen[d.label]}  {d.confidence:.0%}"
 
         if d.polygon and len(d.polygon) >= 3:
             pts = np.array(d.polygon, dtype=np.int32).reshape(-1, 1, 2)

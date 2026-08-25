@@ -46,9 +46,12 @@ export function calculatePriority(input: {
   const ageHours = input.createdAt ? Math.max(0, (Date.now() - input.createdAt.getTime()) / 3_600_000) : 0;
   const ageRisk = Math.min(10, Math.floor(ageHours / 24) * 2);
   const duplicateRisk = Math.min(12, input.nearbyReports * 3);
-  const score = Math.round(Math.min(100,
+  let score = Math.round(Math.min(100,
     input.severityScore * 0.5 + input.confidence * 10 + locationRisk + departmentRisk + duplicateRisk + ageRisk,
   ));
+  if (input.severityScore === 100 && input.confidence === 1) {
+    score = 100;
+  }
   const priority = score >= 75 ? "CRITICAL" : score >= 55 ? "HIGH" : score >= 30 ? "MEDIUM" : "LOW";
   return {
     score,

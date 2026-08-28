@@ -34,6 +34,49 @@ router.post("/login", async (req, res) => {
   res.json({ user: session });
 });
 
+/**
+ * Public sign-up. Creates a CITIZEN account and signs it in.
+ *
+ * The role is hardcoded rather than read from the request: a public endpoint
+ * that lets the caller pick their own role is an account-takeover waiting to
+ * happen. Staff accounts are created by seeding, never here.
+ */
+router.post("/register", async (req, res) => {
+  const email = String(req.body?.email ?? "").trim().toLowerCase();
+  const password = String(req.body?.password ?? "");
+  const name = String(req.body?.name ?? "").trim();
+
+  if (!name) return res.status(400).json({ error: "Please enter your name." });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+    return res.status(400).json({ error: "Please enter a valid email address." });
+  if (password.length < 8)
+    return res.status(400).json({ error: "Password must be at least 8 characters." });
+
+  if (await db.user.findUnique({ where: { email } }))
+    return res.status(409).json({ error: "An account with this email already exists. Sign in instead." });
+
+  const user = await db.user.create({
+    data: {
+      email, name, role: "CITIZEN",
+      // Cost 10, the same as the seeded accounts. Never store the password.
+      passwordHash: await bcrypt.hash(password, 10),
+    },
+  });
+
+  const session = { sub: user.id, email: user.email, name: user.name, role: user.role, departmentId: null };
+  const token = await signSession(session);
+
+  await db.auditLog.create({
+    data: {
+      actor: user.name, actorRole: user.role, action: "CITIZEN_REGISTERED",
+      module: "Authentication", target: user.email, details: "Citizen account created",
+    },
+  });
+
+  res.cookie(COOKIE, token, { httpOnly: true, sameSite: "lax", maxAge: 12 * 3600 * 1000 });
+  res.status(201).json({ user: session });
+});
+
 router.post("/logout", async (req, res) => {
   if (req.session) {
     await db.auditLog.create({

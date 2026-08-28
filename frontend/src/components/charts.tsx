@@ -34,10 +34,21 @@ export function SimpleBarChart({ data, color = "#3d63ec", horizontal = false }: 
             <span className="w-28 shrink-0 truncate text-right text-xs text-slate-600" title={d.label}>
               {d.label}
             </span>
-            <div className="h-5 flex-1 overflow-hidden rounded bg-slate-100">
+            {/* The track is recessed — an inset shadow reads as a groove cut
+                into the card — and the bar sits in it with a light-to-dark
+                gradient and its own drop shadow, so it reads as a solid filling
+                a channel rather than two flat rectangles. */}
+            <div
+              className="h-5 flex-1 overflow-hidden rounded-full bg-slate-100/90"
+              style={{ boxShadow: "inset 0 1px 2px rgba(23,29,80,0.09)" }}
+            >
               <div
-                className="h-full rounded transition-[width] duration-500"
-                style={{ width: `${Math.max(2, (d.value / max) * 100)}%`, background: color }}
+                className="h-full rounded-full transition-[width] duration-500"
+                style={{
+                  width: `${Math.max(2, (d.value / max) * 100)}%`,
+                  background: `linear-gradient(180deg, ${color} 0%, color-mix(in srgb, ${color} 82%, #0b1220) 100%)`,
+                  boxShadow: "0 1px 2px rgba(23,29,80,0.22), inset 0 1px 0 rgba(255,255,255,0.28)",
+                }}
               />
             </div>
             <span className="w-8 shrink-0 text-right text-xs font-semibold text-slate-700 tabular-nums">

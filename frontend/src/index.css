@@ -16,5 +16,70 @@
 }
 
 html, body, #root { height: 100%; }
-body { background: #f4f6fb; color: #0f172a; margin: 0; }
+
+/* Depth comes from layering, not from one heavier shadow.
+   Each level pairs a tight contact shadow — the dark line where an object
+   meets the surface — with a wide, faint ambient one. A single blurred
+   shadow reads as a sticker; the pair reads as a card resting on a page.
+   The tint is the brand blue rather than neutral grey, so shadows sit in
+   the same light as everything else. */
+:root {
+  --elev-1:
+    0 1px 1px rgba(23, 29, 80, 0.04),
+    0 2px 6px -1px rgba(23, 29, 80, 0.06);
+  --elev-2:
+    0 1px 1px rgba(23, 29, 80, 0.05),
+    0 4px 10px -2px rgba(23, 29, 80, 0.07),
+    0 12px 28px -8px rgba(23, 29, 80, 0.08);
+  --elev-3:
+    0 1px 1px rgba(23, 29, 80, 0.06),
+    0 8px 18px -4px rgba(23, 29, 80, 0.10),
+    0 24px 48px -12px rgba(23, 29, 80, 0.14);
+  /* A hairline of white along the top edge. Physical surfaces catch light
+     on their upper lip, and this one line does more for perceived depth
+     than any amount of extra shadow. */
+  --lip: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+body {
+  /* Not a flat fill: a very slight vertical wash, lighter at the top, so
+     the page reads as lit from above and the cards have something to sit on. */
+  background: linear-gradient(180deg, #f7f9fc 0%, #eef1f8 100%) fixed;
+  color: #0f172a;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
 ::selection { background: #c0d2fb; }
+
+/* A raised surface. Border plus lip plus layered shadow — all three, because
+   removing any one of them flattens it. */
+.surface {
+  background: #fff;
+  border: 1px solid rgba(203, 213, 225, 0.75);
+  box-shadow: var(--elev-1), var(--lip);
+  transition: box-shadow 180ms cubic-bezier(0.4, 0, 0.2, 1),
+              transform 180ms cubic-bezier(0.4, 0, 0.2, 1),
+              border-color 180ms ease;
+}
+.surface-raised { box-shadow: var(--elev-2), var(--lip); }
+
+/* Lift on hover, but only where the whole card is a link. A card that rises
+   under the cursor without being clickable is a lie about what it does. */
+.surface-interactive:hover {
+  box-shadow: var(--elev-3), var(--lip);
+  border-color: rgba(148, 179, 248, 0.9);
+  transform: translateY(-2px);
+}
+.surface-interactive:active { transform: translateY(0); box-shadow: var(--elev-1), var(--lip); }
+
+@media (prefers-reduced-motion: reduce) {
+  .surface, .surface-interactive:hover, .surface-interactive:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* Numerals in tables and metrics line up in columns. */
+.tabular { font-variant-numeric: tabular-nums; }

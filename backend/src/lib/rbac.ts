@@ -61,10 +61,12 @@ export const STATUS_LABELS: Record<string, string> = {
   REJECTED: "Rejected",
 };
 
+// The three classes the platform actually detects. Alligator Crack and
+// Overflowing Bin were trained and measured (P 0.639/R 0.225 and P 0.500/
+// R 0.444 on held-out data) and dropped as not fit to show a supervisor;
+// they are suppressed in the detector and are not offered anywhere here.
 export const DAMAGE_CLASSES = [
   "Pothole",
-  "Alligator Crack",
   "Garbage Pile",
-  "Overflowing Bin",
   "Open Manhole",
 ];

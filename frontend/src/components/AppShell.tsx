@@ -3,6 +3,7 @@ import { LogOut } from "lucide-react";
 import { useAuth } from "../auth";
 import { navForRole, ROLE_LABELS } from "../lib/rbac";
 import { Sidebar } from "./Sidebar";
+import { NotificationBell } from "./NotificationBell";
 
 export function AppShell() {
   const { user, loading, logout } = useAuth();
@@ -27,9 +28,14 @@ export function AppShell() {
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white/90 px-6 backdrop-blur">
           <div className="text-sm text-slate-500">
             Lumen City Municipal Corporation ·{" "}
-            <span className="font-medium text-slate-700">Operational Command Center</span>
+            <span className="font-medium text-slate-700">
+              {/* A resident is not looking at an operational command centre.
+                  Naming the surface for who is using it. */}
+              {user.role === "CITIZEN" ? "Citizen Reporting Portal" : "Operational Command Center"}
+            </span>
           </div>
           <div className="flex items-center gap-4">
+            <NotificationBell />
             <div className="flex items-center gap-3">
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-800">
                 {user.name.split(" ").map((p) => p[0]).slice(0, 2).join("")}

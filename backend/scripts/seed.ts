@@ -43,11 +43,11 @@ const DEPARTMENTS: [string, string, string, number][] = [
 /** Engineers carry the damage classes they are trained to handle. */
 const ENGINEERS: [string, string, string, string, number, number][] = [
   // name, deptCode, skills (classes), zone, lat, lng
-  ["Amit Sharma", "RDS", "Pothole,Alligator Crack", "North Zone", 12.995, 77.58],
-  ["Neha Gupta", "RDS", "Pothole,Alligator Crack", "South Zone", 12.915, 77.61],
-  ["Karthik R", "RDS", "Alligator Crack,Pothole", "East Zone", 12.96, 77.68],
-  ["Deepa Nair", "SAN", "Garbage Pile,Overflowing Bin", "West Zone", 12.94, 77.52],
-  ["Manoj Kumar", "SAN", "Garbage Pile,Overflowing Bin", "South Zone", 12.92, 77.59],
+  ["Amit Sharma", "RDS", "Pothole", "North Zone", 12.995, 77.58],
+  ["Neha Gupta", "RDS", "Pothole", "South Zone", 12.915, 77.61],
+  ["Karthik R", "RDS", "Pothole", "East Zone", 12.96, 77.68],
+  ["Deepa Nair", "SAN", "Garbage Pile", "West Zone", 12.94, 77.52],
+  ["Manoj Kumar", "SAN", "Garbage Pile", "South Zone", 12.92, 77.59],
   ["Farhan Ali", "WTR", "Open Manhole", "East Zone", 12.965, 77.66],
   ["Asha Patel", "WTR", "Open Manhole", "Central Zone", 12.975, 77.6],
 ];
@@ -111,9 +111,7 @@ function makePlaces(n: number): [string, string, number, number][] {
  */
 const TITLE_FOR: Record<string, string> = {
   "Pothole": "Deep pothole",
-  "Alligator Crack": "Cracked and broken road surface",
   "Garbage Pile": "Uncollected garbage piling up",
-  "Overflowing Bin": "Overflowing waste bin",
   "Open Manhole": "Open manhole — fall hazard",
 };
 

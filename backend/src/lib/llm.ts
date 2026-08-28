@@ -53,15 +53,26 @@ LUMEN is an AI-assisted civic damage reporting platform. Architecture:
   - Backend:  Express + Prisma REST API over SQLite (port 4000)
   - AI:       FastAPI computer-vision service (port 8100)
 
-Detection: a YOLO11-nano model trained on merged road-damage, waste and
-drainage datasets. It detects 5 classes across 3 categories — Pothole and
-Alligator Crack (Roads), Garbage Pile and Overflowing Bin (Waste), Open
-Manhole (Water). Detection runs on the whole frame first, then on an
-overlapping 4x3 tile grid for small objects, and falls back to a classical
-computer-vision detector (HSV road-surface segmentation plus dark-blob and
-edge-density analysis) if the trained model finds nothing. A COCO-pretrained
-model runs alongside purely as an exclusion filter, so cars and pedestrians
-are never boxed as damage. Uploads with no civic content are rejected.
+Detection: three classes across three categories — Pothole (Roads), Garbage
+Pile (Waste), Open Manhole (Water). Two further classes, Alligator Crack and
+Overflowing Bin, were trained and then withdrawn: on held-out data they scored
+precision 0.639 / recall 0.225 and precision 0.500 / recall 0.444, so they are
+suppressed rather than shown to a supervisor. Do not offer them.
+
+Potholes come from a YOLO11s fine-tuned on LUMEN-domain images; Open Manhole
+from a dedicated detector held at a 0.55 confidence floor, measured to separate
+real manholes (0.56-0.84) from everything else (never above 0.32). Detection
+runs on the whole frame first, then on an overlapping 4x3 tile grid for small
+objects. A COCO-pretrained model runs alongside purely as an exclusion filter,
+so cars and pedestrians are never boxed as damage. Uploads with no civic
+content are rejected by a Places365 scene classifier.
+
+Outlines: potholes and manholes are drawn as polygons rather than rectangles.
+The manhole outline comes from a YOLO11s-seg fine-tune whose training polygons
+were generated semi-automatically with MobileSAM and filtered by a shape gate
+(held-out mask precision 0.858, recall 0.788, mAP50 0.881). It only traces
+boxes the detector already committed to; it never decides that a manhole is
+present. Where an outline cannot be trusted the detection keeps its rectangle.
 
 Severity score = 100 x sum over detections of (class weight x sqrt(area) x confidence).
 

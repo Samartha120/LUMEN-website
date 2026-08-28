@@ -12,7 +12,7 @@ const FEATURES = [
 
 const STATS = [
   ["5", "AI-driven pipeline stages"],
-  ["4", "road-damage classes detected"],
+  ["3", "civic damage classes detected"],
   ["100%", "state-changing actions audit-logged"],
   ["O(n³)", "optimal assignment algorithm"],
 ];

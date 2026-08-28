@@ -2,8 +2,15 @@ export const ROLE_LABELS: Record<string, string> = {
   ADMINISTRATOR: "Administrator",
   SUPERVISOR: "Supervisor",
   ENGINEER: "Field Engineer",
+  CITIZEN: "Resident",
 };
 
+// STAFF_ROLES, not every role. ALL_ROLES used to be every key of ROLE_LABELS,
+// and most nav items were granted to it — so adding CITIZEN above would have
+// silently handed residents the budget planner, the engineer roster and the
+// audit log. Staff access is now listed explicitly and a new role starts with
+// nothing until it is named.
+export const STAFF_ROLES = ["ADMINISTRATOR", "SUPERVISOR", "ENGINEER"];
 export const ALL_ROLES = Object.keys(ROLE_LABELS);
 
 export type NavItem = {
@@ -15,11 +22,17 @@ export type NavItem = {
 };
 
 export const NAV_ITEMS: NavItem[] = [
-  { key: "dashboard", label: "Dashboard", href: "/app/dashboard", icon: "LayoutDashboard", roles: ALL_ROLES },
-  { key: "assistant", label: "Assistant", href: "/app/assistant", icon: "Sparkles", roles: ALL_ROLES },
-  { key: "complaints", label: "Complaints", href: "/app/complaints", icon: "ClipboardList", roles: ALL_ROLES },
-  { key: "gis", label: "GIS Map", href: "/app/gis", icon: "Map", roles: ALL_ROLES },
-  { key: "estimate", label: "Material Estimate", href: "/app/estimate", icon: "Calculator", roles: ALL_ROLES },
+  // Residents get two entries and nothing else: report something, and follow
+  // what they reported.
+  { key: "report", label: "Report an Issue", href: "/app/complaints/new", icon: "Camera", roles: ["CITIZEN"] },
+  { key: "my-reports", label: "My Reports", href: "/app/complaints", icon: "ClipboardList", roles: ["CITIZEN"] },
+
+  { key: "dashboard", label: "Dashboard", href: "/app/dashboard", icon: "LayoutDashboard", roles: STAFF_ROLES },
+  { key: "assistant", label: "Assistant", href: "/app/assistant", icon: "Sparkles", roles: STAFF_ROLES },
+  { key: "complaints", label: "Complaints", href: "/app/complaints", icon: "ClipboardList", roles: STAFF_ROLES },
+  { key: "gis", label: "GIS Map", href: "/app/gis", icon: "Map", roles: STAFF_ROLES },
+  { key: "work-orders", label: "Work Orders", href: "/app/work-orders", icon: "Layers", roles: ["ADMINISTRATOR", "SUPERVISOR"] },
+  { key: "estimate", label: "Material Estimate", href: "/app/estimate", icon: "Calculator", roles: STAFF_ROLES },
   { key: "budget", label: "Budget Planner", href: "/app/budget", icon: "Wallet", roles: ["ADMINISTRATOR", "SUPERVISOR"] },
   { key: "assignment", label: "Assignment", href: "/app/assignment", icon: "HardHat", roles: ["ADMINISTRATOR", "SUPERVISOR"] },
   { key: "engineers", label: "Engineers", href: "/app/engineers", icon: "HardHat", roles: ["ADMINISTRATOR", "SUPERVISOR"] },
@@ -64,10 +77,12 @@ export const STATUS_LABELS: Record<string, string> = {
   REJECTED: "Rejected",
 };
 
+// The three classes the platform actually detects. Alligator Crack and
+// Overflowing Bin were trained and measured (P 0.639/R 0.225 and P 0.500/
+// R 0.444 on held-out data) and dropped as not fit to show a supervisor;
+// they are suppressed in the detector and are not offered anywhere here.
 export const DAMAGE_CLASSES = [
   "Pothole",
-  "Alligator Crack",
   "Garbage Pile",
-  "Overflowing Bin",
   "Open Manhole",
 ];

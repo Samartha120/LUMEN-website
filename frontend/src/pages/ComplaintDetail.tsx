@@ -159,6 +159,13 @@ export function ComplaintDetail() {
         </div>
       )}
 
+      {/* What a resident actually wants to know: has anyone looked at this,
+          who is fixing it, and by when. The staff view answers those across
+          three separate panels in operational language; this says it once, in
+          a sentence. The completion date is the SLA clock the department is
+          actually held to, not a guess. */}
+      {user?.role === "CITIZEN" && <CitizenStatus c={c} />}
+
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card title="Damage Detection">
@@ -336,6 +343,126 @@ export function ComplaintDetail() {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Lets a resident say the work was not actually done.
+ *
+ * A reason is required rather than optional: "reopened" with no explanation
+ * tells the crew returning to the site nothing, and the whole value of this
+ * over filing a fresh complaint is that the history travels with it.
+ */
+function ReopenControl({ refId }: { refId: string }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!reason.trim()) { setError("Please say what is still wrong."); return; }
+    setBusy(true); setError(null);
+    try {
+      await api.post(`/complaints/${refId}/reopen`, { reason: reason.trim() });
+      window.location.reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not reopen this report.");
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="mt-4 border-t border-white/70 pt-3">
+        <p className="text-sm text-slate-600">
+          Still not fixed?{" "}
+          <button onClick={() => setOpen(true)} className="font-semibold text-brand-700 hover:underline">
+            Reopen this report
+          </button>
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 space-y-2 border-t border-white/70 pt-3">
+      <label className="block text-sm font-medium text-slate-700">What is still wrong?</label>
+      <textarea
+        value={reason} onChange={(e) => setReason(e.target.value)} rows={2} autoFocus
+        placeholder="The pothole is still there / it was filled but has sunk again"
+        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+      />
+      {error && <p className="text-sm text-red-700">{error}</p>}
+      <div className="flex gap-2">
+        <button onClick={submit} disabled={busy}
+          className="rounded-lg bg-brand-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-brand-800 disabled:opacity-60">
+          {busy ? "Reopening…" : "Reopen report"}
+        </button>
+        <button onClick={() => { setOpen(false); setError(null); }}
+          className="rounded-lg border border-slate-300 px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The resident-facing answer to "what is happening about my report".
+ *
+ * Written as plain sentences rather than fields. A resident does not need
+ * SLA hours, a priority score or a department code — they need to know
+ * somebody has it, who, and by when. The date is computed from the SLA the
+ * department is actually held to, so it is a commitment rather than a guess.
+ */
+function CitizenStatus({ c }: { c: Complaint }) {
+  const due = new Date(new Date(c.createdAt).getTime() + (c.slaHours ?? 48) * 3600_000);
+  const done = c.status === "CLOSED";
+  const rejected = c.status === "REJECTED";
+  const dueText = due.toLocaleDateString(undefined, { day: "numeric", month: "long" });
+
+  const line = rejected
+    ? "After review this report was closed without work being scheduled."
+    : done
+      ? "The work on this report has been completed and signed off."
+      : c.engineer
+        ? `${c.engineer.name} has been assigned and is expected to complete the work by ${dueText}.`
+        : `Your report has reached ${c.department?.name ?? "the department"} and an engineer will be assigned shortly. Work is due to be completed by ${dueText}.`;
+
+  const tone = rejected
+    ? "border-slate-300 bg-slate-50"
+    : done
+      ? "border-emerald-300 bg-emerald-50"
+      : "border-brand-300 bg-brand-50";
+
+  return (
+    <div className={`surface mb-6 rounded-xl border ${tone} p-5`}>
+      <p className="text-[0.78rem] font-semibold uppercase tracking-[0.07em] text-slate-500">
+        {rejected ? "Closed" : done ? "Completed" : "In progress"}
+      </p>
+      <p className="mt-2 text-[1.05rem] leading-relaxed text-slate-800">{line}</p>
+      {done && <ReopenControl refId={c.ref} />}
+      {!done && !rejected && (
+        <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 border-t border-white/70 pt-3 text-sm">
+          <div>
+            <dt className="text-slate-500">Reference</dt>
+            <dd className="font-semibold text-slate-800">{c.ref}</dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Handled by</dt>
+            <dd className="font-semibold text-slate-800">{c.department?.name ?? "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Engineer</dt>
+            <dd className="font-semibold text-slate-800">{c.engineer?.name ?? "Being assigned"}</dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Due by</dt>
+            <dd className="font-semibold text-slate-800">{dueText}</dd>
+          </div>
+        </dl>
+      )}
+    </div>
   );
 }
 

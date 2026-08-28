@@ -11,7 +11,17 @@ const ICONS: Record<string, LucideIcon> = {
 
 export function Sidebar({ items, roleLabel }: { items: NavItem[]; roleLabel: string }) {
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col bg-brand-950 text-white">
+    // A gradient down the rail rather than a flat fill, and a shadow cast onto
+    // the page so the sidebar sits above the content instead of being painted
+    // beside it. The inner right-edge highlight is the same trick as the card
+    // lip — a single light line where a raised surface catches the light.
+    <aside
+      className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col text-white"
+      style={{
+        background: "linear-gradient(175deg, #202ca7 0%, #171d50 55%, #131845 100%)",
+        boxShadow: "4px 0 24px -8px rgba(23,29,80,0.45), inset -1px 0 0 rgba(255,255,255,0.07)",
+      }}
+    >
       <div className="flex h-16 items-center gap-2.5 border-b border-white/10 px-5">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10">
           <Landmark size={16} />

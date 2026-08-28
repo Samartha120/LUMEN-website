@@ -6,6 +6,13 @@ backend/dist/
 # database (SQLite) — schema and seed are tracked, the data file is not
 database/*.db
 database/*.db-journal
+# ...nor the snapshots taken before each destructive change. These are working
+# safety copies, not history — git is the history.
+database/*.backup*
+database/*.db.backup-*
+# Safety copies taken before destructive changes are named .bak-<tag>-<time>,
+# which the rules above do not match. They are working copies, not history.
+database/*.bak*
 # uploads (user/demo images)
 backend/uploads/*
 !backend/uploads/.gitkeep
@@ -21,6 +28,13 @@ backend/ai-service/data/
 
 # YOLO model weights (downloaded/trained, not source)
 **/*.pt
+# The Places365 scene classifier is a .pth.tar, which the rule above misses —
+# 45 MB of weights that would otherwise land in the repository.
+**/*.pth.tar
+# Ultralytics writes training output to ./runs at whatever the working
+# directory happened to be, so it appears at the project root as well as
+# inside ai-service.
+/runs/
 
 # coursework that happens to live in this folder — not part of LUMEN
 NLP_Experiment_*.ipynb

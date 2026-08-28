@@ -15,9 +15,15 @@ model User {
   /// holds so nobody is tempted to compare it directly.
   passwordHash String
   name         String
-  role         String // ADMINISTRATOR | SUPERVISOR | ENGINEER
+  // ADMINISTRATOR | SUPERVISOR | ENGINEER are staff, created by seeding.
+  // CITIZEN accounts are self-registered from the public sign-up form and can
+  // only report issues and follow their own reports.
+  role         String
   departmentId String?
   department   Department? @relation(fields: [departmentId], references: [id])
+
+  reported      Complaint[]    @relation("ReportedBy")
+  notifications Notification[]
 }
 
 model Department {
@@ -102,6 +108,20 @@ model Complaint {
   images       ComplaintImage[]
   events       TimelineEvent[]
 
+  // The citizen who reported it, when one did. Nullable because seeded and
+  // staff-entered complaints have no reporter, and because a complaint must
+  // outlive the account that raised it — a deleted user should not take a
+  // municipal work item with them.
+  reporterId String?
+  reporter   User?   @relation("ReportedBy", fields: [reporterId], references: [id])
+
+  notifications Notification[]
+
+  // Set when a resident says the work was not actually done. Kept as its own
+  // field rather than inferred from the timeline so the queue can surface
+  // reopened complaints without replaying every event.
+  reopenedAt DateTime?
+
   // --- Feature 6: repair material estimation
   // Set by the engineer on site; decides which mix the estimator uses.
   roadType     String? // BITUMINOUS | CONCRETE
@@ -169,4 +189,26 @@ model PotholeMeasurement {
   source      String    @default("MEASURED")
 
   @@index([complaintId])
+}
+
+/// A message to one person about one complaint.
+///
+/// Written when something happens that the recipient would otherwise have to
+/// poll for — an engineer assigned, work started, a closure approved. Without
+/// this a resident has no way to learn anything except by logging in and
+/// looking, which is the difference between a dashboard and a service.
+model Notification {
+  id          String     @id @default(cuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  complaintId String?
+  complaint   Complaint? @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+
+  type    String // ASSIGNED | STARTED | COMPLETED | CLOSED | REJECTED | REOPENED | VERIFY_FAILED
+  message String
+  readAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
 }

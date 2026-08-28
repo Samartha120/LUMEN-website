@@ -13,6 +13,7 @@ import { suggestDimensions, ESTIMATE_NOTE } from "../lib/dimensions.js";
 import { haversineMeters, cosineSimilarity, textSimilarity } from "../lib/geo.js";
 import { categoryOf, CATEGORIES, type CategoryKey } from "../lib/taxonomy.js";
 import { calculatePriority } from "../lib/priority.js";
+import { notifyReporter, notifyDepartment } from "../lib/notify.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
@@ -88,6 +89,10 @@ router.get("/", requireAuth, async (req, res) => {
     const eng = await db.engineer.findFirst({ where: { name: s.name } });
     where.engineerId = eng?.id ?? "__none__";
   }
+  // A citizen sees the reports they filed and nothing else. Scoped in the
+  // query rather than filtered after fetching, so another resident's complaint
+  // never leaves the database in the first place.
+  if (s.role === "CITIZEN") where.reporterId = s.sub;
   const complaints = await db.complaint.findMany({
     where, include: { department: true, engineer: true, duplicateOf: { select: { ref: true } } },
     orderBy: [{ severityScore: "desc" }, { createdAt: "desc" }], take: 100,
@@ -109,11 +114,17 @@ router.get("/:ref", requireAuth, async (req, res) => {
     },
   });
   if (!c) return res.status(404).json({ error: "Complaint not found." });
+  // 404 rather than 403 when a citizen asks for someone else's complaint.
+  // "Forbidden" would confirm the reference exists, which lets an outsider map
+  // the queue by trying CMP-10245, CMP-10246 and reading the status codes.
+  if (req.session!.role === "CITIZEN" && c.reporterId !== req.session!.sub)
+    return res.status(404).json({ error: "Complaint not found." });
   res.json({ complaint: { ...c, ...currentPriority(c) } });
 });
 
 // POST /api/complaints  (Features 1,2,3)
-router.post("/", requireAuth, requireRole("SUPERVISOR", "ADMINISTRATOR"), upload.array("photos", MAX_PHOTOS), async (req, res) => {
+// Citizens may report; only staff may do anything else to a complaint.
+router.post("/", requireAuth, requireRole("SUPERVISOR", "ADMINISTRATOR", "CITIZEN"), upload.array("photos", MAX_PHOTOS), async (req, res) => {
   const s = req.session!;
   const b = req.body ?? {};
   const title = String(b.title ?? "").trim();
@@ -245,6 +256,10 @@ router.post("/", requireAuth, requireRole("SUPERVISOR", "ADMINISTRATOR"), upload
       duplicateOfId: dup?.id ?? null, dupSimilarity: dup?.sim ?? null, dupDistanceM: dup ? Math.round(dup.dist) : null,
       dupScore: dup?.score ?? null, dupCategoryMatch: dup?.categoryMatch ?? null, dupDescriptionSimilarity: dup?.descriptionSimilarity ?? null,
       status: "SUBMITTED", departmentId: dept.id,
+      // Recorded only for citizen reports. Staff entering a complaint on
+      // someone's behalf are the actor in the timeline, not the reporter, so
+      // leaving this null keeps "my reports" meaning what a citizen expects.
+      reporterId: s.role === "CITIZEN" ? s.sub : null,
       images: { create: storedImages },
     },
   });
@@ -292,6 +307,18 @@ router.post("/:ref/transition", requireAuth, async (req, res) => {
   await db.complaint.update({ where: { ref: c.ref }, data: { status: to, closedAt: to === "CLOSED" ? new Date() : c.closedAt } });
   await db.timelineEvent.create({ data: { complaintId: c.id, type: "STATUS_CHANGE", message: `${STATUS_LABELS[c.status]} → ${STATUS_LABELS[to]}`, actor: s.name } });
   await audit(s.name, s.role, `COMPLAINT_${to}`, c.ref, `Status ${c.status} → ${to}`);
+
+  // Tell the resident who reported it. Worded for someone who did not read the
+  // status machine — "Pending Review" means nothing outside this building.
+  const said: Record<string, string> = {
+    ASSIGNED: `An engineer has been assigned to your report ${c.ref}.`,
+    IN_PROGRESS: `Work has started on your report ${c.ref}.`,
+    PENDING_REVIEW: `The work on ${c.ref} is finished and awaiting a supervisor's sign-off.`,
+    CLOSED: `Your report ${c.ref} has been completed and closed. If the problem is still there, you can reopen it.`,
+    REJECTED: `Your report ${c.ref} was reviewed and closed without work being scheduled.`,
+  };
+  if (said[to]) await notifyReporter(c.id, to, said[to]);
+
   res.json({ ok: true });
 });
 
@@ -417,6 +444,42 @@ router.get("/:ref/suggest-dimensions", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "No pothole regions confident enough to estimate from." });
   }
   res.json({ potholes, note: ESTIMATE_NOTE });
+});
+
+/**
+ * POST /api/complaints/:ref/reopen
+ *
+ * The resident says the work was not actually done. Without this their only
+ * recourse is to file a second complaint, which loses the history and shows up
+ * as a duplicate of the thing that was supposedly fixed.
+ *
+ * It returns to SUBMITTED rather than IN_PROGRESS: the original engineer has
+ * already reported it finished, so it should be triaged again rather than
+ * silently handed back to the same person.
+ */
+router.post("/:ref/reopen", requireAuth, requireRole("CITIZEN"), async (req, res) => {
+  const s = req.session!;
+  const reason = String(req.body?.reason ?? "").trim();
+  const c = await db.complaint.findUnique({ where: { ref: req.params.ref } });
+
+  // 404 rather than 403 for someone else's complaint, for the same reason the
+  // detail route does: a different code confirms the reference exists.
+  if (!c || c.reporterId !== s.sub) return res.status(404).json({ error: "Complaint not found." });
+  if (c.status !== "CLOSED") return res.status(422).json({ error: "Only a completed report can be reopened." });
+  if (!reason) return res.status(400).json({ error: "Please say what is still wrong." });
+
+  await db.complaint.update({
+    where: { id: c.id },
+    data: { status: "SUBMITTED", reopenedAt: new Date(), closedAt: null, engineerId: null },
+  });
+  await db.timelineEvent.create({
+    data: { complaintId: c.id, type: "STATUS_CHANGE", actor: s.name, message: `Reopened by the resident — ${reason}` },
+  });
+  await audit(s.name, s.role, "COMPLAINT_REOPENED", c.ref, reason);
+  await notifyDepartment(c.departmentId, c.id, "REOPENED",
+    `${c.ref} was reopened by the resident: ${reason}`);
+
+  res.json({ ok: true, status: "SUBMITTED" });
 });
 
 export default router;

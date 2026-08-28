@@ -36,7 +36,10 @@ export function NewComplaint() {
   // picture, and the fix is to choose another one.
   const [rejected, setRejected] = useState<string | null>(null);
 
-  if (user && !["SUPERVISOR", "ADMINISTRATOR"].includes(user.role)) return <Navigate to="/app/complaints" replace />;
+  // Residents report issues too — that is the whole point of the citizen role.
+  // Engineers do not: they carry out work that has already been triaged.
+  if (user && !["SUPERVISOR", "ADMINISTRATOR", "CITIZEN"].includes(user.role))
+    return <Navigate to="/app/complaints" replace />;
 
   const input = "w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200";
   const label = "mb-1.5 block text-sm font-medium text-slate-700";

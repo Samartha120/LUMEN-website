@@ -1,7 +1,19 @@
 import { Router } from "express";
 import { db } from "../lib/db.js";
 import { requireAuth, requireRole } from "../lib/auth.js";
+
+/**
+ * Every operational surface in this router is for staff.
+ *
+ * These endpoints previously carried `requireAuth` alone, which was correct
+ * while every account was staff. Adding the CITIZEN role silently opened them:
+ * a resident could read city-wide statistics from /api/dashboard and the
+ * location of every complaint in the city from /api/gis. Naming the roles is
+ * the fix — a new role now starts with no access and has to be granted it.
+ */
+const requireStaff = requireRole("ADMINISTRATOR", "SUPERVISOR", "ENGINEER");
 import { aiHealth } from "../lib/ai.js";
+import { buildClusters, RADIUS_M, type Clusterable } from "../lib/clusters.js";
 import { estimateMaterials, type RoadType } from "../lib/materials.js";
 import { computeAssignmentPlan } from "../lib/assignment.js";
 import { LANDMARKS } from "../lib/landmarks.js";
@@ -17,7 +29,7 @@ router.get("/health", async (_req, res) => {
   res.json({ ai: await aiHealth() });
 });
 
-router.get("/dashboard", requireAuth, async (_req, res) => {
+router.get("/dashboard", requireAuth, requireStaff, async (_req, res) => {
   const complaints = await db.complaint.findMany({ include: { engineer: true, department: true }, orderBy: { createdAt: "desc" } });
   res.json({ complaints, ai: await aiHealth() });
 });
@@ -27,7 +39,7 @@ router.get("/dashboard", requireAuth, async (_req, res) => {
  * returned whole complaint rows including detection JSON and base64 image
  * paths, roughly 200 KB for a view that draws dots.
  */
-router.get("/gis", requireAuth, async (_req, res) => {
+router.get("/gis", requireAuth, requireStaff, async (_req, res) => {
   const [complaints, engineers] = await Promise.all([
     db.complaint.findMany({
       where: { status: { in: OPEN }, duplicateOfId: null },
@@ -82,7 +94,7 @@ router.get("/audit-logs", requireAuth, requireRole("ADMINISTRATOR", "SUPERVISOR"
  * bituminous road and a concrete road need entirely different materials and
  * summing them into a single figure would be meaningless.
  */
-router.get("/estimate", requireAuth, async (req, res) => {
+router.get("/estimate", requireAuth, requireStaff, async (req, res) => {
   const wastageRaw = Number(req.query.wastage ?? 5);
   const wastage = Number.isFinite(wastageRaw) ? Math.min(50, Math.max(0, wastageRaw)) : 5;
 
@@ -146,7 +158,7 @@ router.get("/estimate", requireAuth, async (req, res) => {
  * the two is deliberate: a plan that ignored real measurements because some
  * complaints lack them would be worse, not purer.
  */
-router.get("/plan", requireAuth, async (req, res) => {
+router.get("/plan", requireAuth, requireStaff, async (req, res) => {
   const budget = Math.max(0, Number(req.query.budget ?? 500_000));
   const crews = Math.min(10, Math.max(1, Number(req.query.crews ?? 3)));
   const horizonDays = Math.min(30, Math.max(1, Number(req.query.horizon ?? 7)));
@@ -248,6 +260,74 @@ router.post("/assignment/apply", requireAuth, requireRole("ADMINISTRATOR", "SUPE
   });
 
   res.json({ applied: plan.assignments.length, plan });
+});
+
+/**
+ * GET /api/clusters
+ *
+ * Open complaints grouped into single work orders — see lib/clusters.ts for
+ * why grouping is single-linkage and never crosses departments.
+ *
+ * Only open work is grouped. A closed complaint on the same street is history,
+ * not something to dispatch a crew for.
+ */
+router.get("/clusters", requireAuth, requireStaff, async (_req, res) => {
+  const open = await db.complaint.findMany({
+    where: { status: { in: ["SUBMITTED", "ASSIGNED", "IN_PROGRESS"] } },
+    select: {
+      id: true, ref: true, title: true, lat: true, lng: true, category: true,
+      civicCategory: true, status: true, severityScore: true, priorityScore: true,
+      slaHours: true, createdAt: true, zone: true, address: true,
+    },
+  });
+
+  const clusters = buildClusters(open as Clusterable[]);
+  const grouped = clusters.reduce((n, c) => n + c.members.length, 0);
+
+  res.json({
+    radiusM: RADIUS_M,
+    clusters,
+    summary: {
+      openComplaints: open.length,
+      clusters: clusters.length,
+      complaintsInClusters: grouped,
+      // The headline: dispatches avoided by sending one crew per cluster
+      // instead of one per complaint.
+      visitsSaved: clusters.reduce((n, c) => n + c.visitsSaved, 0),
+    },
+  });
+});
+
+/**
+ * GET /api/notifications
+ *
+ * What has happened to this person's complaints that they have not yet seen.
+ * Available to every signed-in role: a resident is told their report was
+ * assigned, a supervisor that a resident disputed a closure.
+ */
+router.get("/notifications", requireAuth, async (req, res) => {
+  const items = await db.notification.findMany({
+    where: { userId: req.session!.sub },
+    include: { complaint: { select: { ref: true, title: true, status: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 30,
+  });
+  res.json({
+    notifications: items,
+    unread: items.filter((n) => !n.readAt).length,
+  });
+});
+
+/** Mark one notification read, or all of them when no id is given. */
+router.post("/notifications/read", requireAuth, async (req, res) => {
+  const id = req.body?.id ? String(req.body.id) : null;
+  await db.notification.updateMany({
+    // Scoped by userId as well as id — without it, posting someone else's
+    // notification id would mark their unread items as read.
+    where: { userId: req.session!.sub, ...(id ? { id } : { readAt: null }) },
+    data: { readAt: new Date() },
+  });
+  res.json({ ok: true });
 });
 
 export default router;

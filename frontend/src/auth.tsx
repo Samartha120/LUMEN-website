@@ -13,6 +13,7 @@ type AuthCtx = {
   user: SessionUser | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -34,10 +35,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const d = await api.post("/auth/login", { email, password });
     setUser(d.user);
   }
+  // Sign-up signs you straight in — the server sets the session cookie on the
+  // same response, so a new resident never has to type their password twice.
+  async function register(name: string, email: string, password: string) {
+    const d = await api.post("/auth/register", { name, email, password });
+    setUser(d.user);
+  }
   async function logout() {
     await api.post("/auth/logout").catch(() => {});
     setUser(null);
   }
 
-  return <Ctx.Provider value={{ user, loading, login, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, login, register, logout }}>{children}</Ctx.Provider>;
 }

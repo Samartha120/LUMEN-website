@@ -73,7 +73,11 @@ FALLBACK_WEIGHTS = "yolo11n.pt"
 # it cannot invent a garbage pile or misroute a complaint to another department.
 SPECIALIST_WEIGHTS = WEIGHTS_DIR / "pothole_specialist.pt"
 SPECIALIST_MIN_CONF = 0.50
-USE_POTHOLE_SPECIALIST = os.environ.get("LUMEN_POTHOLE_SPECIALIST", "1") == "1"
+# Off. The specialist was a YOLOv8n-seg that existed only to outline potholes,
+# and potholes are no longer outlined (see POLYGON_CLASSES), so it was never
+# called and its checkpoint was deleted. The code path is left intact so the
+# flag still works if a pothole tracer is ever reinstated with new weights.
+USE_POTHOLE_SPECIALIST = os.environ.get("LUMEN_POTHOLE_SPECIALIST", "0") == "1"
 # Whether the segmentation specialist may report potholes on its own account,
 # as opposed to only drawing the outline of one the primary detector found.
 # Off: it produced whole-frame false positives that the primary model correctly
@@ -185,8 +189,9 @@ SEGMENT_TRACE_CONF = float(os.environ.get("LUMEN_SEGMENT_TRACE_CONF", "0.10"))
 # The gain is credited to 680 hard negatives — manhole covers, open voids,
 # cracked and stained dashcam roads — teaching it what is *not* a pothole.
 #
-# Samdutse stays as the fallback: if the fine-tune is missing, detection
-# degrades to the previous model rather than to nothing.
+# The Samdutse fallback checkpoint was deleted once the fine-tune proved out,
+# so this now resolves to the fine-tune or to nothing. The else branch is kept
+# because it costs a line and documents where a fallback would go.
 FINE_TUNED_WEIGHTS = Path(__file__).resolve().parent / "models" / "pothole_best.pt"
 LOCAL_POTHOLE_WEIGHTS = (FINE_TUNED_WEIGHTS if FINE_TUNED_WEIGHTS.exists()
                          else WEIGHTS_DIR / "pothole_local.pt")
@@ -217,7 +222,347 @@ _local_pothole_failed = False
 # proves only that the contradiction is gone, not that the model generalises.
 # The test that matters is whether it stays silent on a closed cover.
 MANHOLE_WEIGHTS = Path(__file__).resolve().parent / "models" / "manhole_best.pt"
-MANHOLE_CONF = float(os.environ.get("LUMEN_MANHOLE_CONF", "0.35"))
+# 0.55, not 0.35. Measured over 40 genuine open manholes and 40 closed covers
+# that the model still fires on:
+#
+#     conf 0.35   keeps 40/40 real   admits 40/40 closed covers
+#     conf 0.55   keeps 39/40 real   admits 17/40
+#
+# At 0.35 it fires on everything round and dark, which is how a pothole came
+# to be labelled Open Manhole at 37% while the pothole model called the same
+# pixels a pothole at 70% (CMP-10358). One real manhole is lost; a great many
+# wrong ones are not drawn.
+# 0.50. First set to 0.55 from the confidence spread on the complaint set,
+# then re-measured on the 92-image held-out test split, which is the honest
+# test — 46 real manholes and 46 intact covers the model never trained on:
+#
+#     conf 0.35   recall 93%   false alarms 3/46
+#     conf 0.50   recall 87%   false alarms 1/46
+#     conf 0.55   recall 80%   false alarms 1/46
+#
+# 0.55 gave up three real manholes to remove no false alarms at all, so 0.50 is
+# strictly better. It still fires on 0 of the 77 non-manhole complaint images,
+# which is the regression that mattered: at the original 0.35 a pothole was
+# labelled Open Manhole at 37% while the pothole model called it a pothole at
+# 70% (CMP-10358).
+MANHOLE_CONF = float(os.environ.get("LUMEN_MANHOLE_CONF", "0.50"))
+
+# Second chance for a manhole the detector nearly saw.
+#
+# At 0.50 the detector misses about one manhole in seven, and none of those
+# misses are blanks — measured on the held-out split they score 0.31 to 0.41,
+# sitting just under the bar. Simply lowering the bar to 0.35 recovers them and
+# also starts calling intact covers hazards, which is the failure this class
+# had in the first place.
+#
+# So a weak detection is admitted only when a SECOND, independently trained
+# model agrees there is a manhole in the same place. models/manhole_seg.pt was
+# trained on different labels (outlines, not boxes) and a different split, so
+# its agreement is real evidence rather than the same model saying it twice.
+# Measured on 46 held-out manholes and 46 intact covers:
+#
+#     detector >= 0.50 only            recall 87%   false alarms 1/46
+#     + agreement (0.35 / 0.25)        recall 93%   false alarms 2/46
+#     detector >= 0.35, no agreement   recall 93%   false alarms 3/46
+#
+# Same recall as dropping the bar, for one fewer false alarm — and on the 112
+# complaint images it keeps all 33 manholes while adding 0 false ones, so the
+# pothole that was labelled Open Manhole at 37% (CMP-10358) stays fixed.
+MANHOLE_WEAK_CONF = float(os.environ.get("LUMEN_MANHOLE_WEAK_CONF", "0.35"))
+MANHOLE_AGREE_CONF = float(os.environ.get("LUMEN_MANHOLE_AGREE_CONF", "0.25"))
+
+# --- Manhole outlines -------------------------------------------------------
+# The manhole corpus is bounding boxes only, so the detector cannot produce a
+# polygon: 1,290 labels, none of them an outline. Rather than leave the class
+# drawn as a rectangle, the box is handed to a PROMPTABLE segmentation model
+# (MobileSAM), which is asked one question — "which pixels inside this box are
+# the object?" — and answers without knowing or caring what the object is.
+#
+# This cannot invent, move, or relabel a detection. SAM never runs unprompted;
+# it only refines an outline for a box the manhole detector already committed
+# to. Detection stays the detector's job, boundary becomes SAM's.
+#
+# Restricted to Open Manhole on purpose. Measured over every box-only detection
+# in the complaint set:
+#
+#     Open Manhole   29/33 outlined (88%)   the 4 refusals are correct
+#     Pothole        13/110              traced the whole frame, or a blob of
+#                                        clean road, on the ones it accepted
+#     Garbage Pile    3/36               a pile has no single boundary
+#
+# A manhole is one compact, roughly convex opening, which is why the shape gate
+# below is meaningful for it and meaningless for a garbage pile. Potholes keep
+# the dedicated pothole segmentation model they already have.
+# Which classes are allowed to carry a segmentation outline at all.
+#
+# Open Manhole only, by decision rather than by capability. A polygon changes
+# no number anywhere — severity, priority, volume and the material estimate are
+# all computed from `area_ratio` and `box`, and dimensions.ts never reads the
+# outline — so this is purely what a supervisor is shown.
+#
+# A manhole is a discrete object with a real boundary, and it is traced well:
+# 94% of complaint detections and 98% of detections on unseen uploads. A pothole
+# has no crisp edge. Its tracer managed 42%, so a supervisor saw outlines on
+# some potholes and rectangles on others with no visible reason for the
+# difference, and a YOLO11s-seg trained on 300 annotated photos to fix that
+# scored mask mAP50 0.713 and drew its extra outlines around water patches and
+# pothole rims. A rectangle is the honest shape for a fuzzy depression.
+#
+# Enforced here rather than at each tracer so no future source can reintroduce
+# a polygon on a class that is not meant to have one.
+POLYGON_CLASSES = {
+    c.strip() for c in os.environ.get("LUMEN_POLYGON_CLASSES", "Open Manhole").split(",")
+    if c.strip()
+}
+
+OUTLINE_MANHOLES = os.environ.get("LUMEN_SAM_OUTLINE", "1") == "1"
+SAM_WEIGHTS = Path(__file__).parent / "mobile_sam.pt"
+
+# The tracer of first resort is a YOLO11s-seg fine-tuned on manhole outlines
+# (models/manhole_seg.pt). Its training labels did not exist either: the 467
+# box-labelled hazard images were outlined by MobileSAM, filtered by the shape
+# gate below, and the 311 survivors checked by eye — the semi-automatic
+# annotation route the STDL streetview project takes with LiDAR and a Hough
+# transform. 114 epochs, early-stopped, held-out test of 92 images:
+#
+#     mask   P 0.858   R 0.788   mAP50 0.881
+#     box    P 0.858   R 0.788   mAP50 0.879
+#
+# Recall is below the 0.80 target and is NOT claimed to meet it.
+#
+# It is used only to TRACE, never to detect, even though it can detect. Asked
+# to find manholes on the complaint set it fired on 5 of 79 images with no
+# manhole in them, while the calibrated detector fires on 0 — so letting it
+# detect would reintroduce the false positives that MANHOLE_CONF above was
+# raised to remove. Confined to tracing boxes the detector already committed
+# to, it outlines 33 of 33 against MobileSAM's 29, and runs in a fraction of
+# SAM's 386 ms per box. SAM stays as the fallback for anything it cannot match.
+SEG_WEIGHTS = Path(__file__).parent / "models" / "manhole_seg.pt"
+SEG_TRACE_CONF = float(os.environ.get("LUMEN_SEG_TRACE_CONF", "0.15"))
+_seg_model = None
+_seg_failed = False
+
+
+def _seg_outline(img: np.ndarray, box: list[float]) -> np.ndarray | None:
+    """Largest contour the manhole segmentation model finds inside `box`."""
+    global _seg_model, _seg_failed
+    if _seg_failed:
+        return None
+    if _seg_model is None:
+        if not SEG_WEIGHTS.exists():
+            _seg_failed = True
+            return None
+        try:
+            from ultralytics import YOLO
+            _seg_model = YOLO(str(SEG_WEIGHTS))
+        except Exception:
+            _seg_failed = True
+            return None
+    try:
+        # A low bar on purpose: the decision that there IS a manhole here was
+        # already made by the detector, so this is only asked where to put the
+        # boundary. A weak trace that overlaps nothing is discarded below.
+        res = _seg_model.predict(img, conf=SEG_TRACE_CONF, verbose=False)[0]
+        if res.masks is None or len(res.masks) == 0:
+            return None
+        best, best_iou = None, 0.0
+        for mb, mask in zip(res.boxes.xyxy, res.masks.data):
+            cand = [float(v) for v in mb]
+            iou = _iou(cand, box)
+            if iou > best_iou:
+                best, best_iou = mask, iou
+        if best is None or best_iou < SEG_MIN_BOX_IOU:
+            return None
+        m = best.cpu().numpy().astype(np.uint8)
+        if m.shape[:2] != img.shape[:2]:
+            m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = [c for c in cnts if cv2.contourArea(c) > 20]
+        return max(cnts, key=cv2.contourArea) if cnts else None
+    except Exception:
+        return None
+
+# SAM answers every prompt, including prompts where the honest answer is "not
+# this box". On loose boxes around a square paving slab it outlined the SLAB
+# instead of the manhole in it. Those failures are not subtle once measured:
+#
+#     correct outlines   solidity 0.955-0.989, one dominant blob
+#     wrong object       solidity 0.893-0.941, fragmenting into 2-7 pieces
+#
+# So an outline is accepted only if it looks like one compact object. Solidity
+# is contour area over convex-hull area: a manhole ring is nearly convex, while
+# a mask that has crawled along mortar lines is not. Dominance requires the
+# largest piece to be essentially the whole mask — this tolerates the specks
+# SAM leaves in the slots of a cover (CMP-10288, a correct outline that a
+# stricter "exactly one blob" rule rejected) while still rejecting a mask that
+# has genuinely shattered.
+#
+# A rejected outline is not a failure. The detection keeps its rectangle, which
+# is honest about where the boundary is not known. A confident polygon drawn
+# around the wrong object is worse than an obvious box.
+OUTLINE_MIN_SOLIDITY = 0.95
+OUTLINE_MIN_DOMINANCE = 0.90
+
+# The trained tracer is judged on agreement, not convexity.
+#
+# The 0.95 solidity floor above was calibrated against MobileSAM, which is
+# prompted with a box and knows nothing about manholes — asked the wrong
+# question it will happily outline the paving slab, and the tell was a ragged
+# mask fragmenting into 2-7 pieces. models/manhole_seg.pt cannot make that
+# mistake: it is trained on manholes only, so the thing it outlines is a
+# manhole or it outlines nothing.
+#
+# For it the meaningful check is whether its mask lands where the detector said
+# the manhole is. Measured over all 33 manhole detections in the complaint set:
+#
+#     solidity  min 0.918   median 0.984
+#     IoU with the detector's own box   min 0.58   median 0.79
+#
+# Agreement is tightened from 0.30 to 0.50, which all 33 clear with room to
+# spare. Convexity was ALSO relaxed to 0.90 to reach 33/33, and that was wrong:
+# the two outlines it admitted (CMP-10254, CMP-10263) traced the whole cracked
+# slab, intact paving included, instead of the opening in the middle of it.
+# Solidity 0.918 with one clean blob and IoU 0.90 against the detector box all
+# looked healthy, and the outline was still around the wrong thing — a class-
+# constrained tracer narrows what can be outlined, it does not guarantee which
+# part gets outlined. So the floor stays at 0.95 and those two keep a rectangle.
+SEG_MIN_SOLIDITY = OUTLINE_MIN_SOLIDITY
+SEG_MIN_BOX_IOU = 0.50
+OUTLINE_MIN_BOX_PX = 8
+
+_sam_model = None
+_sam_failed = False
+
+
+def _seg_agreement(img: np.ndarray, box: list[float]) -> float:
+    """Confidence the segmentation model puts on a manhole overlapping `box`."""
+    if _seg_model is None and not _seg_failed:
+        _seg_outline(img, box)          # loads the model, result unused
+    if _seg_model is None:
+        return 0.0
+    try:
+        res = _seg_model.predict(img, conf=0.01, verbose=False)[0]
+        if res.boxes is None or len(res.boxes) == 0:
+            return 0.0
+        return max((float(c) for b, c in zip(res.boxes.xyxy, res.boxes.conf)
+                    if _iou([float(v) for v in b], box) >= 0.30), default=0.0)
+    except Exception:
+        return 0.0
+
+
+def _outline_from_point(img: np.ndarray, box: list[float]) -> list[list[float]] | None:
+    """Last resort: prompt SAM with the darkest point inside the box.
+
+    A box prompt asks "what is in this rectangle", and on a broken slab the
+    honest answer is the slab — which is how CMP-10254 got outlined around the
+    paving instead of the hole in it. A point prompt asks a narrower question:
+    "what is THIS", aimed at the darkest pixel in the box, which on a manhole is
+    the opening rather than the cover around it.
+
+    Judged on containment, not convexity. The opening in a broken cover is
+    genuinely jagged — the trace that works here scores solidity 0.695 — so the
+    0.95 floor would reject a correct outline. What separates it from the slab
+    failure is that the whole mask sits inside the detector's box and does not
+    fill it: the slab traces spilled past the box and swallowed it.
+    """
+    x1, y1, x2, y2 = (int(v) for v in box)
+    if x2 - x1 < OUTLINE_MIN_BOX_PX or y2 - y1 < OUTLINE_MIN_BOX_PX:
+        return None
+    if _sam_model is None:
+        return None
+    try:
+        sub = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+        sub = cv2.GaussianBlur(sub, (21, 21), 0)
+        my, mx = np.unravel_index(int(np.argmin(sub)), sub.shape)
+        res = _sam_model(img, points=[[x1 + int(mx), y1 + int(my)]], labels=[1],
+                         verbose=False)[0]
+        if res.masks is None or len(res.masks) == 0:
+            return None
+        m = res.masks.data[0].cpu().numpy().astype(np.uint8)
+        if m.shape[:2] != img.shape[:2]:
+            m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        total = float(m.sum())
+        if total <= 0:
+            return None
+        inside = float(m[y1:y2, x1:x2].sum())
+        box_area = max((x2 - x1) * (y2 - y1), 1)
+        # Entirely within the box the detector committed to, and a part of it
+        # rather than the whole of it.
+        if inside / total < 0.95 or not (0.02 <= inside / box_area <= 0.90):
+            return None
+        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = [c for c in cnts if cv2.contourArea(c) > 20]
+        if not cnts:
+            return None
+        big = max(cnts, key=cv2.contourArea)
+        area = cv2.contourArea(big)
+        if area <= 0 or area / max(sum(cv2.contourArea(c) for c in cnts), 1.0) < OUTLINE_MIN_DOMINANCE:
+            return None
+        pts = cv2.approxPolyDP(big, 0.004 * cv2.arcLength(big, True), True).reshape(-1, 2)
+        if len(pts) < 3:
+            return None
+        return [[round(float(x), 1), round(float(y), 1)] for x, y in pts]
+    except Exception:
+        return None
+
+
+def _outline(img: np.ndarray, box: list[float]) -> list[list[float]] | None:
+    """Trace the object inside `box`. None when the trace is not trustworthy."""
+    global _sam_model, _sam_failed
+    if not OUTLINE_MANHOLES or _sam_failed:
+        return None
+    x1, y1, x2, y2 = (int(v) for v in box)
+    if x2 - x1 < OUTLINE_MIN_BOX_PX or y2 - y1 < OUTLINE_MIN_BOX_PX:
+        return None
+    trained = _seg_outline(img, [x1, y1, x2, y2])
+    if trained is not None:
+        poly = _accept_outline([trained], SEG_MIN_SOLIDITY)
+        if poly:
+            return poly
+    if _sam_model is None:
+        if not SAM_WEIGHTS.exists():
+            _sam_failed = True
+            return None
+        try:
+            from ultralytics import SAM
+            _sam_model = SAM(str(SAM_WEIGHTS))
+        except Exception:
+            _sam_failed = True
+            return None
+    try:
+        res = _sam_model(img, bboxes=[[x1, y1, x2, y2]], verbose=False)[0]
+        if res.masks is None or len(res.masks) == 0:
+            return None
+        mask = res.masks.data[0].cpu().numpy().astype(np.uint8)
+        # SAM returns the mask at its own working resolution.
+        if mask.shape[:2] != img.shape[:2]:
+            mask = cv2.resize(mask, (img.shape[1], img.shape[0]),
+                              interpolation=cv2.INTER_NEAREST)
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        poly = _accept_outline([c for c in cnts if cv2.contourArea(c) > 20])
+        return poly if poly else _outline_from_point(img, [x1, y1, x2, y2])
+    except Exception:
+        return None
+
+
+def _accept_outline(cnts: list, min_solidity: float = OUTLINE_MIN_SOLIDITY) -> list[list[float]] | None:
+    """Apply the shape gate and simplify. None when the trace is not trusted."""
+    if not cnts:
+        return None
+    big = max(cnts, key=cv2.contourArea)
+    area = cv2.contourArea(big)
+    if area <= 0:
+        return None
+    solidity = area / max(cv2.contourArea(cv2.convexHull(big)), 1.0)
+    dominance = area / max(sum(cv2.contourArea(c) for c in cnts), 1.0)
+    if solidity < min_solidity or dominance < OUTLINE_MIN_DOMINANCE:
+        return None
+    # Simplified so the polygon travels as a few dozen points rather than
+    # several hundred; the tolerance is well under a pixel of visible drift.
+    pts = cv2.approxPolyDP(big, 0.004 * cv2.arcLength(big, True), True).reshape(-1, 2)
+    if len(pts) < 3:
+        return None
+    return [[round(float(x), 1), round(float(y), 1)] for x, y in pts]
 _manhole_model = None
 _manhole_failed = False
 
@@ -237,16 +582,22 @@ def _manholes(img: np.ndarray, frame_area: float) -> list["Detection"]:
     if _manhole_model is None:
         return []
     try:
-        res = _manhole_model.predict(img, conf=MANHOLE_CONF, verbose=False)[0]
+        res = _manhole_model.predict(
+            img, conf=min(MANHOLE_WEAK_CONF, MANHOLE_CONF), verbose=False)[0]
     except Exception:
         return []
     out: list[Detection] = []
     for b in getattr(res, "boxes", []) or []:
         x1, y1, x2, y2 = (float(v) for v in b.xyxy[0])
         area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        conf = round(float(b.conf[0]), 4)
+        box = [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]
+        if conf < MANHOLE_CONF:
+            # Below the confident bar: only survives if the other model agrees.
+            if _seg_agreement(img, box) < MANHOLE_AGREE_CONF:
+                continue
         out.append(Detection(
-            label="Open Manhole", confidence=round(float(b.conf[0]), 4),
-            box=[round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+            label="Open Manhole", confidence=conf, box=box,
             area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
         ))
     return out
@@ -593,11 +944,19 @@ class Detection:
     confidence: float
     box: list[float]      # [x1, y1, x2, y2] in pixels
     area_ratio: float     # box area / image area
-    # Segmentation outline in full-frame pixels, [[x, y], ...], when the model
-    # that produced this detection was a segmentation model. A pothole is an
-    # irregular blob, so a rectangle both looks crude and overstates its plan
-    # area — which then propagates into the volume and the cost estimate.
-    # Detection-only models leave this empty and are drawn as boxes.
+    # Segmentation outline in full-frame pixels, [[x, y], ...], when a tracer
+    # could vouch for the boundary. Detections without one are drawn as boxes.
+    #
+    # PRESENTATION ONLY. Every downstream number — severity, priority, volume,
+    # the material estimate — is computed from `area_ratio` and `box`, and
+    # backend/src/lib/dimensions.ts never reads this field. An earlier version
+    # of this comment claimed the polygon corrected the plan area a rectangle
+    # overstates, and that propagation was never implemented. Two detections of
+    # the same defect, one outlined and one not, cost exactly the same.
+    #
+    # It earns its place on Open Manhole, which is a discrete object with a real
+    # boundary a supervisor can judge. A pothole has no crisp edge, so a
+    # rectangle there is not merely acceptable, it is arguably the honest shape.
     polygon: list[list[float]] | None = None
 
 
@@ -803,10 +1162,18 @@ def _arbitrate_classes(dets: list["Detection"],
     # that training, not evidence. The manhole model is the only one that has
     # ever been shown a cover and asked whether it is open. On this pair it
     # wins on standing rather than on volume.
+    # How far behind the pothole model the manhole model may be and still win.
+    # Standing is not a blank cheque: the six conflicts that justified this rule
+    # had the two models within about 0.15 of each other, and a manhole call
+    # that trails a pothole call by more than that is not a close disagreement
+    # between specialists — it is one model being unsure while the other is not.
+    SPECIALIST_MARGIN = 0.20
     specialist_wins = {("Pothole", "Open Manhole")}
     for i, a in enumerate(dets):
         for j, b in enumerate(dets):
             if i == j or (a.label, b.label) not in specialist_wins:
+                continue
+            if a.confidence - b.confidence > SPECIALIST_MARGIN:
                 continue
             if _iou(a.box, b.box) > thresh or _contained(a.box, b.box) > 0.70 \
                or _contained(b.box, a.box) > 0.70:
@@ -1195,14 +1562,25 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
         #
         # Anything the segmentation model has no opinion on keeps its box,
         # rather than being given an outline it has not earned.
-        # Open Manhole is offered to the tracer as well as Pothole. The tracer
-        # is a pothole segmentation model, so it has no idea what a manhole is
-        # and only recognises about one in three of them — but an outline it
-        # does find is a genuine trace of the exposed cavity, which is a better
-        # thing to show a supervisor than a rectangle around the whole cover.
-        # Anything it cannot trace keeps its box, exactly as an untraceable
-        # pothole already does.
-        _TRACEABLE = {"Pothole", "Open Manhole"}
+        # Potholes only. Open Manhole was offered to the tracer briefly and the
+        # result was inconsistent — the tracer is a pothole segmentation model
+        # and recognised barely one manhole in three, so the class would have
+        # shown an outline sometimes and a box otherwise for no reason a viewer
+        # could see.
+        #
+        # Deriving the cavity by image processing instead was tried and
+        # rejected: "the hole is the dark part" is not true often enough. A
+        # displaced concrete cover is brighter than the wet stone around it, so
+        # a darkness threshold outlines the cover; shadows under a raised slab
+        # are as dark as the opening; and where a broken cover sits inside the
+        # hole there is no single dark blob to find. It outlined the wrong
+        # object on four of six manholes. A confident boundary drawn around the
+        # wrong thing is worse than an honest rectangle.
+        #
+        # A tight outline here needs a manhole segmentation model trained on
+        # polygons around openings, and that data does not exist — the corpus
+        # is bounding boxes only.
+        _TRACEABLE = {"Pothole"} & POLYGON_CLASSES
         if any(d.label in _TRACEABLE and not d.polygon for d in dets):
             # Asked at a much lower threshold than when it is used to detect.
             # A shape that overlaps nothing already found is discarded below,
@@ -1260,6 +1638,20 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
                     )
                     traced += 1
             if traced:
+                detector += "+SEGMENTED"
+
+        # Manholes are outlined last, once the class is settled, so that a box
+        # relabelled by arbitration is never traced under its old identity.
+        if OUTLINE_MANHOLES:
+            outlined = 0
+            for d in dets:
+                if d.label != "Open Manhole" or d.polygon:
+                    continue
+                poly = _outline(img, d.box)
+                if poly:
+                    d.polygon = poly
+                    outlined += 1
+            if outlined and "+SEGMENTED" not in detector:
                 detector += "+SEGMENTED"
 
         # A whole-frame pass reliably finds the nearest, largest defect and
@@ -1447,6 +1839,13 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
     # Which civic category dominates this photo? The class with the largest
     # weighted contribution decides the category, and therefore the department.
     routing = route_from_detections(dets)
+
+    # A class not permitted an outline is drawn as a rectangle. The detection,
+    # its box, its confidence and every derived number are untouched — only the
+    # outline is dropped, and _annotate falls through to cv2.rectangle.
+    for d in dets:
+        if d.polygon and d.label not in POLYGON_CLASSES:
+            d.polygon = None
 
     payload = []
     for d in dets:

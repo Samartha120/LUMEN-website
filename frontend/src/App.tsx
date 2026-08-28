@@ -18,6 +18,22 @@ import { Assignment } from "./pages/Assignment";
 import { Gis } from "./pages/Gis";
 import { Engineers } from "./pages/Engineers";
 import { AuditLogs } from "./pages/AuditLogs";
+import { WorkOrders } from "./pages/WorkOrders";
+import { useAuth } from "./auth";
+import { STAFF_ROLES } from "./lib/rbac";
+
+/**
+ * Renders its children only for staff. A resident is sent to their own reports
+ * instead — this is the second half of the citizen boundary, the first being
+ * that the server scopes every query by reporter. Neither alone is enough: the
+ * sidebar hides the links, this stops a typed URL, and the API is what
+ * actually protects the data.
+ */
+function StaffOnly({ children, to = "/app/complaints" }: { children: React.ReactNode; to?: string }) {
+  const { user } = useAuth();
+  if (user && !STAFF_ROLES.includes(user.role)) return <Navigate to={to} replace />;
+  return <>{children}</>;
+}
 
 export function App() {
   return (
@@ -31,18 +47,24 @@ export function App() {
       </Route>
       <Route path="/auth/login" element={<Login />} />
       <Route path="/app" element={<AppShell />}>
-        <Route index element={<Navigate to="/app/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard />} />
+        {/* Residents land on their own reports; staff on the dashboard. */}
+        <Route index element={<StaffOnly to="/app/complaints"><Navigate to="/app/dashboard" replace /></StaffOnly>} />
         <Route path="complaints" element={<Complaints />} />
         <Route path="complaints/new" element={<NewComplaint />} />
         <Route path="complaints/:ref" element={<ComplaintDetail />} />
-        <Route path="assistant" element={<Assistant />} />
-        <Route path="estimate" element={<Estimate />} />
-        <Route path="budget" element={<Budget />} />
-        <Route path="assignment" element={<Assignment />} />
-        <Route path="gis" element={<Gis />} />
-        <Route path="engineers" element={<Engineers />} />
-        <Route path="audit-logs" element={<AuditLogs />} />
+
+        {/* Staff-only. Guarded here as well as hidden from the sidebar —
+            hiding a link is presentation, not access control, and a resident
+            typing /app/engineers must not reach the roster. */}
+        <Route path="dashboard" element={<StaffOnly><Dashboard /></StaffOnly>} />
+        <Route path="assistant" element={<StaffOnly><Assistant /></StaffOnly>} />
+        <Route path="estimate" element={<StaffOnly><Estimate /></StaffOnly>} />
+        <Route path="budget" element={<StaffOnly><Budget /></StaffOnly>} />
+        <Route path="assignment" element={<StaffOnly><Assignment /></StaffOnly>} />
+        <Route path="gis" element={<StaffOnly><Gis /></StaffOnly>} />
+        <Route path="work-orders" element={<StaffOnly><WorkOrders /></StaffOnly>} />
+        <Route path="engineers" element={<StaffOnly><Engineers /></StaffOnly>} />
+        <Route path="audit-logs" element={<StaffOnly><AuditLogs /></StaffOnly>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

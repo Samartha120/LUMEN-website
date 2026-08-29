@@ -280,6 +280,13 @@ MANHOLE_CONF = float(os.environ.get("LUMEN_MANHOLE_CONF", "0.50"))
 MANHOLE_WEAK_CONF = float(os.environ.get("LUMEN_MANHOLE_WEAK_CONF", "0.30"))
 MANHOLE_TTA = os.environ.get("LUMEN_MANHOLE_TTA", "1") == "1"
 MULTICLASS_TTA = os.environ.get("LUMEN_MULTICLASS_TTA", "1") == "1"
+
+# How confident a specialist must be to overturn a scene-classifier rejection.
+# Set at the manhole model's own confident floor, which was measured to give
+# one false alarm in seventy intact covers — a bar that already survives the
+# hardest negatives this class has.
+SCENE_RESCUE_CONF = float(os.environ.get("LUMEN_SCENE_RESCUE_CONF", "0.50"))
+PERSON_OVERLAP_MAX = float(os.environ.get("LUMEN_PERSON_OVERLAP", "0.6"))
 MANHOLE_AGREE_CONF = float(os.environ.get("LUMEN_MANHOLE_AGREE_CONF", "0.25"))
 
 # --- Manhole outlines -------------------------------------------------------
@@ -1470,24 +1477,41 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
     # classifier and the COCO subject check, neither of which this affects.
     scene = assess_scene(img, want="urban")
     if not scene["looks_civic"]:
-        return {
-            "model_mode": mode,
-            "detector": "REJECTED",
-            "image_size": {"width": w, "height": h},
-            "valid_image": False,
-            "image_type": "unrelated",
-            "potholes_detected": False,
-            "count": 0,
-            "message": "Please upload an appropriate road image for pothole detection.",
-            "hint": ("Upload a clear image of a road, street, pavement, parking area, "
-                     "or other road surface."),
-            "detections": [],
-            "severity": score_severity([]),
-            "routing": route_from_detections([]),
-            "scene": scene,
-            # The photograph is returned untouched: no box, no mask, no label.
-            "annotated_png_b64": _to_b64_png(img),
-        }
+        # Before refusing, ask the calibrated specialists whether they can see
+        # something. The reasoning above is right that SILENCE from a damage
+        # model cannot establish relevance — quiet is ambiguous between an
+        # intact road and a picture of a cat. A confident detection is not
+        # ambiguous. If the manhole model, held at a floor measured to give one
+        # false alarm in seventy intact covers, says there is an open manhole
+        # here, the photograph is of civic infrastructure whatever the scene
+        # classifier made of it.
+        #
+        # This is not hypothetical: well1_0083 is a close-up of an open manhole
+        # that the manhole model reads at 0.67 and the scene classifier rejects
+        # as "unrelated", so the detection was discarded and the citizen told to
+        # upload a road image. Close-ups are exactly where a scene classifier
+        # struggles, and exactly how manholes and rubbish are photographed.
+        rescue = _manholes(img, frame_area) + _local_potholes(img, frame_area)
+        rescue = [d for d in rescue if d.confidence >= SCENE_RESCUE_CONF]
+        if not rescue:
+            return {
+                "model_mode": mode,
+                "detector": "REJECTED",
+                "image_size": {"width": w, "height": h},
+                "valid_image": False,
+                "image_type": "unrelated",
+                "potholes_detected": False,
+                "count": 0,
+                "message": "Please upload an appropriate road image for pothole detection.",
+                "hint": ("Upload a clear image of a road, street, pavement, parking area, "
+                         "or other road surface."),
+                "detections": [],
+                "severity": score_severity([]),
+                "routing": route_from_detections([]),
+                "scene": scene,
+                # The photograph is returned untouched: no box, no mask, no label.
+                "annotated_png_b64": _to_b64_png(img),
+            }
 
     detector = mode
     if mode == "HEURISTIC":
@@ -1825,10 +1849,19 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
                     filtered_dets.append(d)
                     continue
 
-                # Person constraint to avoid classifying people as damage/bins
+                # Person constraint to avoid classifying people as damage.
+                #
+                # 0.4 was too strict for rubbish. A pile in a street scene is
+                # routinely photographed with passers-by in frame, and one
+                # COCO person box overlapping it by 0.55 was enough to delete a
+                # Garbage Pile the model read at 0.63. Swept over 76 labelled
+                # piles: a 0.4 bar discards 2 of them, 0.5 discards 1, and 0.6
+                # discards none — so the detections being lost were sitting
+                # beside people, not on them. Raised to 0.6, which still drops
+                # anything mostly ON a person.
                 overlaps_person = False
                 for p_box in people_boxes:
-                    if _box_intersection_ratio(d.box, p_box) > 0.4:
+                    if _box_intersection_ratio(d.box, p_box) > PERSON_OVERLAP_MAX:
                         overlaps_person = True
                         break
                 if overlaps_person:

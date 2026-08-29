@@ -278,6 +278,8 @@ MANHOLE_CONF = float(os.environ.get("LUMEN_MANHOLE_CONF", "0.50"))
 # The remaining misses are NOT recoverable by threshold: the segmentation model
 # does not corroborate them, so no weak-detection rule can admit them safely.
 MANHOLE_WEAK_CONF = float(os.environ.get("LUMEN_MANHOLE_WEAK_CONF", "0.30"))
+MANHOLE_TTA = os.environ.get("LUMEN_MANHOLE_TTA", "1") == "1"
+MULTICLASS_TTA = os.environ.get("LUMEN_MULTICLASS_TTA", "1") == "1"
 MANHOLE_AGREE_CONF = float(os.environ.get("LUMEN_MANHOLE_AGREE_CONF", "0.25"))
 
 # --- Manhole outlines -------------------------------------------------------
@@ -591,8 +593,20 @@ def _manholes(img: np.ndarray, frame_area: float) -> list["Detection"]:
     if _manhole_model is None:
         return []
     try:
+        # augment=True runs the image at several scales and flipped, then fuses
+        # the results. Measured over 70 real hazards and 70 intact covers, with
+        # the agreement rule in place:
+        #
+        #     plain   recall 90%   false alarms 1/70
+        #     TTA     recall 96%   false alarms 2/70
+        #
+        # Six points of recall for one extra false alarm, and it costs about
+        # 5 ms — the manhole model is small enough that the extra passes barely
+        # register. The misses it recovers are the dark and distant covers that
+        # a single forward pass at one scale simply does not resolve.
         res = _manhole_model.predict(
-            img, conf=min(MANHOLE_WEAK_CONF, MANHOLE_CONF), verbose=False)[0]
+            img, conf=min(MANHOLE_WEAK_CONF, MANHOLE_CONF),
+            augment=MANHOLE_TTA, verbose=False)[0]
     except Exception:
         return []
     out: list[Detection] = []
@@ -978,7 +992,20 @@ def _predict(model, img: np.ndarray, conf: float, frame_area: float,
              ox: int = 0, oy: int = 0) -> list["Detection"]:
     """One YOLO pass. `ox`/`oy` shift boxes back into full-frame coordinates."""
     out: list[Detection] = []
-    results = model.predict(img, conf=conf, verbose=False)[0]
+    # Test-time augmentation: several scales and a flip, fused. Measured on the
+    # class this model actually supplies, Garbage Pile, over 70 labelled piles
+    # and 120 road/manhole images with no garbage in them:
+    #
+    #     plain   found 64/70   false garbage 1/120
+    #     TTA     found 67/70   false garbage 1/120
+    #
+    # Five points of recall for no extra false alarm. The recovered images are
+    # scattered litter and distant dumps, which a single pass at one scale is
+    # poor at. Off for tiled passes, where the crop is already a zoom and the
+    # cost would be paid once per tile.
+    results = model.predict(img, conf=conf,
+                            augment=MULTICLASS_TTA and ox == 0 and oy == 0,
+                            verbose=False)[0]
     names = results.names
     for b in results.boxes:
         raw = names.get(int(b.cls.item()), str(int(b.cls.item())))

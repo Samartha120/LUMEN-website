@@ -268,7 +268,16 @@ MANHOLE_CONF = float(os.environ.get("LUMEN_MANHOLE_CONF", "0.50"))
 # Same recall as dropping the bar, for one fewer false alarm — and on the 112
 # complaint images it keeps all 33 manholes while adding 0 false ones, so the
 # pothole that was labelled Open Manhole at 37% (CMP-10358) stays fixed.
-MANHOLE_WEAK_CONF = float(os.environ.get("LUMEN_MANHOLE_WEAK_CONF", "0.35"))
+# 0.30, swept 2026-08-29 over 70 real hazards and 70 intact covers:
+#
+#     weak 0.35  recall 89%   false alarms 1/70   (was live)
+#     weak 0.30  recall 90%   false alarms 1/70
+#     weak 0.25  recall 90%   false alarms 1/70   (no further gain)
+#
+# One extra manhole for no extra false alarm, and the curve is flat below 0.30.
+# The remaining misses are NOT recoverable by threshold: the segmentation model
+# does not corroborate them, so no weak-detection rule can admit them safely.
+MANHOLE_WEAK_CONF = float(os.environ.get("LUMEN_MANHOLE_WEAK_CONF", "0.30"))
 MANHOLE_AGREE_CONF = float(os.environ.get("LUMEN_MANHOLE_AGREE_CONF", "0.25"))
 
 # --- Manhole outlines -------------------------------------------------------

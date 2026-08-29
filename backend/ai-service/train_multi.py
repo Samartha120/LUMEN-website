@@ -200,11 +200,31 @@ def merge(cap: int = 0) -> None:
     # A category folder may hold the dataset directly, or one sub-folder per
     # dataset (which is how the Roboflow downloader lays them out).
     datasets: list[tuple[str, Path]] = []
+    # Corpora that must never be trained on, whatever they claim to contain.
+    #
+    # roads/potholes_trained labels intact manhole covers and storm-drain
+    # grates as potholes. Inspected 2026-08-29 after it appeared to show a 23%
+    # pothole miss rate: of 12 images the detector "missed", five were
+    # undamaged manhole covers, five were drain grates, and two were specks on
+    # an empty road. The detector was right; the labels are wrong.
+    #
+    # Training on it teaches the model that a manhole cover is a pothole — the
+    # exact confusion that took a day to remove from this pipeline. Kept on
+    # disk because it may be the only surviving copy of the corpus behind
+    # models/pothole_best.pt, but not fit to train on again unrelabelled.
+    EXCLUDED = {"roads/potholes_trained"}
+
     for cat_dir in sorted(p for p in SOURCES.iterdir() if p.is_dir()):
+        if cat_dir.name in EXCLUDED:
+            print(f"  SKIPPED {cat_dir.name} — excluded, see EXCLUDED above")
+            continue
         if (cat_dir / "data.yaml").exists():
             datasets.append((cat_dir.name, cat_dir))
         else:
             for sub in sorted(p for p in cat_dir.iterdir() if p.is_dir()):
+                if f"{cat_dir.name}/{sub.name}" in EXCLUDED:
+                    print(f"  SKIPPED {cat_dir.name}/{sub.name} — excluded, see EXCLUDED above")
+                    continue
                 if (sub / "data.yaml").exists():
                     datasets.append((cat_dir.name, sub))
     if not datasets:

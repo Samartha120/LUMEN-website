@@ -22,7 +22,7 @@ from pathlib import Path
 import cv2, numpy as np
 
 SRC = Path("data/sources/water/manholes")
-OUT = Path("data/manhole_seg")
+OUT = Path("data/manhole_seg2")
 HAZARD = {"0", "3"}          # Broken, Uncovered
 MIN_SOLIDITY, MIN_DOMINANCE = 0.95, 0.90
 SEED = 42
@@ -54,6 +54,50 @@ def outline(sam, img, box_xyxy):
     return pts if len(pts) >= 3 else None
 
 
+def outline_from_point(sam, img, box_xyxy):
+    """Point prompt at the darkest pixel in the box, for openings a box misses.
+
+    A box prompt asks "what is in this rectangle", and on a broken slab the
+    honest answer is the slab. This asks "what is THIS" at the darkest pixel,
+    which on a manhole is the opening. Judged on containment rather than
+    convexity, because a broken opening is legitimately jagged.
+    """
+    x1, y1, x2, y2 = (int(v) for v in box_xyxy)
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return None
+    sub = cv2.cvtColor(img[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    sub = cv2.GaussianBlur(sub, (21, 21), 0)
+    my, mx = np.unravel_index(int(np.argmin(sub)), sub.shape)
+    r = sam(img, points=[[x1 + int(mx), y1 + int(my)]], labels=[1], verbose=False)[0]
+    if r.masks is None or len(r.masks) == 0:
+        return None
+    m = r.masks.data[0].cpu().numpy().astype(np.uint8)
+    if m.shape[:2] != img.shape[:2]:
+        m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+    total = float(m.sum())
+    if total <= 0:
+        return None
+    inside = float(m[y1:y2, x1:x2].sum())
+    if inside / total < 0.95 or not (0.02 <= inside / max((x2 - x1) * (y2 - y1), 1) <= 0.90):
+        return None
+    cs, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cs = [c for c in cs if cv2.contourArea(c) > 20]
+    if not cs:
+        return None
+    big = max(cs, key=cv2.contourArea)
+    a = cv2.contourArea(big)
+    if a <= 0 or a / max(sum(cv2.contourArea(c) for c in cs), 1.0) < MIN_DOMINANCE:
+        return None
+    return cv2.approxPolyDP(big, 0.004 * cv2.arcLength(big, True), True).reshape(-1, 2)
+
+
+# A polygon that fills far less of its own bounding box than an ellipse would
+# (~0.79) has been cut off — SAM traced part of the cover and stopped. Teaching
+# the model on those is how it learns to truncate, which is exactly the fault
+# seen on CMP-10460, so they are dropped.
+MIN_BBOX_FILL = 0.65
+
+
 def main():
     from ultralytics import SAM
     sam = SAM("mobile_sam.pt")
@@ -78,6 +122,13 @@ def main():
             cx, cy, bw, bh = (float(v) for v in r[1:5])
             box = [(cx - bw / 2) * W, (cy - bh / 2) * H, (cx + bw / 2) * W, (cy + bh / 2) * H]
             p = outline(sam, img, box)
+            if p is None:
+                p = outline_from_point(sam, img, box)
+            if p is not None:
+                bw = p[:, 0].max() - p[:, 0].min()
+                bh = p[:, 1].max() - p[:, 1].min()
+                if cv2.contourArea(p.reshape(-1, 1, 2)) / max(bw * bh, 1) < MIN_BBOX_FILL:
+                    p = None            # truncated trace, do not teach it
             if p is None:
                 polys = None            # drop the whole image, see docstring
                 break

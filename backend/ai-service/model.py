@@ -361,12 +361,28 @@ _seg_model = None
 _seg_failed = False
 
 
-def _seg_mirror_mask(img: np.ndarray, box: list[float]) -> "np.ndarray | None":
-    """The same trace on a mirrored image, flipped back into place."""
+def _blobs(mask: np.ndarray) -> list:
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return [c for c in cnts if cv2.contourArea(c) > 20]
+
+
+def _largest(mask: np.ndarray) -> "np.ndarray | None":
+    cnts = _blobs(mask)
+    return max(cnts, key=cv2.contourArea) if cnts else None
+
+
+def _seg_flip_mask(img: np.ndarray, box: list[float], code: int) -> "np.ndarray | None":
+    """The same trace on a flipped image, flipped back into place.
+
+    `code` is an OpenCV flip code: 1 mirrors left-right, 0 top-bottom.
+    """
     try:
-        w = img.shape[1]
-        flipped = cv2.flip(img, 1)
-        fbox = [w - box[2], box[1], w - box[0], box[3]]
+        h, w = img.shape[:2]
+        flipped = cv2.flip(img, code)
+        if code == 1:
+            fbox = [w - box[2], box[1], w - box[0], box[3]]
+        else:
+            fbox = [box[0], h - box[3], box[2], h - box[1]]
         res = _seg_model.predict(flipped, conf=SEG_TRACE_CONF, verbose=False)[0]
         if res.masks is None or len(res.masks) == 0:
             return None
@@ -380,7 +396,7 @@ def _seg_mirror_mask(img: np.ndarray, box: list[float]) -> "np.ndarray | None":
         m = best.cpu().numpy().astype(np.uint8)
         if m.shape[:2] != img.shape[:2]:
             m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
-        return cv2.flip(m, 1)
+        return cv2.flip(m, code)
     except Exception:
         return None
 
@@ -405,18 +421,23 @@ def _seg_outline(img: np.ndarray, box: list[float]) -> np.ndarray | None:
         # already made by the detector, so this is only asked where to put the
         # boundary. A weak trace that overlaps nothing is discarded below.
         #
-        # Traced twice, once mirrored, and the two masks unioned. A segmentation
-        # model is not left-right symmetric: on a cover filling most of the
-        # frame it reliably clips one side, and mirroring moves the clip to the
-        # other side, so the union recovers the whole object. Measured on the
-        # three complaints reported as incompletely outlined, span of the
-        # detector's box covered by the trace:
+        # Traced three times -- as given, mirrored left-right, and flipped
+        # top-bottom -- and the masks unioned. A segmentation model is not
+        # symmetric in either axis: on a cover filling most of the frame it
+        # reliably clips one side, and flipping moves the clip to the opposite
+        # side, so the union recovers the whole object. Span of the detector's
+        # box covered by the trace, on the complaints that were reported as
+        # incompletely outlined:
         #
-        #     CMP-10414   0.79 -> 0.92
-        #     CMP-10460   0.78 -> 0.88
-        #     CMP-10472   0.84 -> 0.89
+        #     CMP-10414   0.79 -> 0.92     (left-right)
+        #     CMP-10472   0.84 -> 0.89     (left-right)
+        #     CMP-10311   0.72 -> 0.88     (top-bottom)
+        #     CMP-10288   0.72 -> 0.88     (top-bottom)
+        #     CMP-10460   0.78 -> 1.01     (both)
         #
-        # Costs one extra forward pass on a 10M-parameter model.
+        # Over all 56 manholes the vertical pass improves nine outlines and
+        # makes none worse. Costs two extra forward passes on a 10M-parameter
+        # model, which on this image size is a few milliseconds.
         res = _seg_model.predict(img, conf=SEG_TRACE_CONF, verbose=False)[0]
         if res.masks is None or len(res.masks) == 0:
             return None
@@ -432,13 +453,29 @@ def _seg_outline(img: np.ndarray, box: list[float]) -> np.ndarray | None:
         if m.shape[:2] != img.shape[:2]:
             m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
 
-        mirror = _seg_mirror_mask(img, box)
-        if mirror is not None:
-            m = cv2.bitwise_or(m, mirror)
+        union = m.copy()
+        for code in (1, 0):
+            flipped = _seg_flip_mask(img, box, code)
+            if flipped is not None:
+                union = cv2.bitwise_or(union, flipped)
 
-        cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = [c for c in cnts if cv2.contourArea(c) > 20]
-        return max(cnts, key=cv2.contourArea) if cnts else None
+        # The union is kept only when it is still a single tidy object that
+        # stays within the detector's box. Two ways it can go wrong, both seen:
+        # the flipped pass finds a piece the original missed but does not join
+        # it up, leaving fragments (CMP-10440); or it reaches past the object
+        # onto the surrounding pavement (CMP-10460, whose union spilled to 101%
+        # of the box). In either case the plain trace was already good, so that
+        # is what is used.
+        best = _largest(union)
+        if best is not None:
+            area = cv2.contourArea(best)
+            others = sum(cv2.contourArea(c) for c in _blobs(union))
+            x, y, w, h = cv2.boundingRect(best)
+            box_area = max((box[2] - box[0]) * (box[3] - box[1]), 1.0)
+            if (area / max(others, 1.0) >= OUTLINE_MIN_DOMINANCE
+                    and (w * h) / box_area <= SEG_UNION_MAX_SPAN):
+                return best
+        return _largest(m)
     except Exception:
         return None
 
@@ -497,6 +534,8 @@ ELLIPSE_REPAIR_MIN_IOU = 0.92
 CONCAVE_MIN_FILL = 0.35
 CONCAVE_MAX_FILL = 0.92
 CONCAVE_MIN_CONTAINMENT = 0.95
+# A flipped-pass union wider than this has left the object. See _seg_outline.
+SEG_UNION_MAX_SPAN = 0.98
 # A manhole box this large is the model giving up and returning the frame,
 # not a close-up. See _manholes and _drop_frame_duplicates.
 MANHOLE_LOOSE_FRAME = 0.80

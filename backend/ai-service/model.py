@@ -501,6 +501,11 @@ CONCAVE_MIN_CONTAINMENT = 0.95
 # not a close-up. See _manholes and _drop_frame_duplicates.
 MANHOLE_LOOSE_FRAME = 0.80
 MANHOLE_MAX_FRAME = 0.90
+# A box drawn around an already-kept, more confident box of the same class is
+# a duplicate of it at a looser scale. See _nms.
+CONTAINER_DROP = 0.90
+# A pothole this far inside a garbage pile is litter, not road damage.
+LITTER_POTHOLE_DROP = 0.90
 SEG_MIN_BOX_IOU = 0.50
 OUTLINE_MIN_BOX_PX = 8
 
@@ -1376,6 +1381,29 @@ def _merge_overlapping(dets: list["Detection"], frame_area: float,
     return sorted(merged, key=lambda d: -d.confidence)
 
 
+def _drop_litter_potholes(dets: list["Detection"]) -> list["Detection"]:
+    """Discard a pothole found entirely inside a heap of refuse.
+
+    Road damage is damage to the road surface. A pothole box sitting wholly
+    within a garbage pile is not on the road at all -- it is a dark gap between
+    bags, or a flattened box, whose texture reads like broken tarmac. The two
+    classes are not in competition here, which is why class arbitration leaves
+    it alone: the models are describing different things in the same place, and
+    only one of them can be standing on the ground.
+
+    Deliberately requires near-total containment. A real pothole beside a heap
+    overlaps it partially and is kept -- CMP-10258 sits 29% inside the pile and
+    survives. Across the 200 complaints this fires exactly twice, on CMP-10264
+    and CMP-10282, both fully enclosed.
+    """
+    piles = [d for d in dets if d.label == "Garbage Pile"]
+    if not piles:
+        return dets
+    return [d for d in dets
+            if d.label != "Pothole"
+            or max(_contained(d.box, p.box) for p in piles) < LITTER_POTHOLE_DROP]
+
+
 def _arbitrate_classes(dets: list["Detection"],
                        thresh: float = 0.30) -> list["Detection"]:
     """Resolve two different classes claiming the same pixels.
@@ -1458,7 +1486,21 @@ def _nms(dets: list["Detection"], thresh: float = 0.45) -> list["Detection"]:
     kept: list[Detection] = []
     for d in sorted(dets, key=lambda x: -x.confidence):
         duplicate = any(
-            k.label == d.label and (_iou(k.box, d.box) > thresh or _contained(d.box, k.box) > 0.7)
+            k.label == d.label and (
+                _iou(k.box, d.box) > thresh
+                # d sits inside something already kept...
+                or _contained(d.box, k.box) > 0.7
+                # ...or d is a loose box drawn around something already kept.
+                # One pothole was being boxed two and three times over: a tight
+                # confident box, and around it a larger vague one from another
+                # scale or another model. Suppression only ever looked for the
+                # first case, so the loose box always survived. Across the 200
+                # complaints this fires 36 times, in 17 photographs, and every
+                # single time the box being dropped is the less confident of
+                # the pair -- 0.57 drawn around 0.86, 0.28 around 0.84. It
+                # never fires on a garbage pile or a manhole.
+                or _contained(k.box, d.box) > CONTAINER_DROP
+            )
             for k in kept
         )
         if not duplicate:
@@ -1816,6 +1858,7 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
         dets = _merge_overlapping(
             local_pot + manholes + remote_dets + main_dets + special_dets, frame_area)
         dets = _arbitrate_classes(dets)
+        dets = _drop_litter_potholes(dets)
 
         # Give every pothole its true outline.
         #

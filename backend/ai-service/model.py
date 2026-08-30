@@ -497,6 +497,10 @@ ELLIPSE_REPAIR_MIN_IOU = 0.92
 CONCAVE_MIN_FILL = 0.35
 CONCAVE_MAX_FILL = 0.92
 CONCAVE_MIN_CONTAINMENT = 0.95
+# A manhole box this large is the model giving up and returning the frame,
+# not a close-up. See _manholes and _drop_frame_duplicates.
+MANHOLE_LOOSE_FRAME = 0.80
+MANHOLE_MAX_FRAME = 0.90
 SEG_MIN_BOX_IOU = 0.50
 OUTLINE_MIN_BOX_PX = 8
 
@@ -654,9 +658,15 @@ def _outline(img: np.ndarray, box: list[float]) -> list[list[float]] | None:
         poly = _accept_outline([trained], SEG_MIN_SOLIDITY)
         if poly:
             return poly
-        poly = _ellipse_repair(trained, [x1, y1, x2, y2])
-        if poly:
-            return poly
+        # Not attempted when the box is most of the photograph: there is no
+        # background left for the rim to sit against, and the fit lands on
+        # whatever fills the frame. CMP-10387 is a cable chamber shot at 98%
+        # of the frame, where this drew an arc across the whole image.
+        frame_frac = ((x2 - x1) * (y2 - y1)) / max(img.shape[0] * img.shape[1], 1)
+        if frame_frac < MANHOLE_MAX_FRAME:
+            poly = _ellipse_repair(trained, [x1, y1, x2, y2])
+            if poly:
+                return poly
     if _sam_model is None:
         if not SAM_WEIGHTS.exists():
             _sam_failed = True
@@ -781,15 +791,59 @@ def _manholes(img: np.ndarray, frame_area: float) -> list["Detection"]:
         area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
         conf = round(float(b.conf[0]), 4)
         box = [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]
+        frame_frac = area / frame_area if frame_area else 0.0
         if conf < MANHOLE_CONF:
             # Below the confident bar: only survives if the other model agrees.
+            # Except when the box is most of the photograph, which is not a
+            # localisation at all -- the model has failed to find anything and
+            # fallen back on the whole frame, so there is nothing for the
+            # second model to corroborate. CMP-10443 is a road covered in
+            # potholes and no manhole; it entered here at 0.43 with a box over
+            # 85% of the frame. Genuine close-ups clear the confident bar
+            # (CMP-10451 is 85% of its frame at 0.58) and are unaffected.
+            if frame_frac >= MANHOLE_LOOSE_FRAME:
+                continue
             if _seg_agreement(img, box) < MANHOLE_AGREE_CONF:
                 continue
         out.append(Detection(
             label="Open Manhole", confidence=conf, box=box,
-            area_ratio=round(area / frame_area, 5) if frame_area else 0.0,
+            area_ratio=round(frame_frac, 5),
         ))
-    return out
+    return _drop_frame_duplicates(out)
+
+
+def _drop_frame_duplicates(dets: list["Detection"]) -> list["Detection"]:
+    """Discard a frame-sized box that merely swallows a real detection.
+
+    Where the model has already localised a manhole properly, a second box
+    spanning the whole photograph adds nothing -- it is the same object found
+    twice, once precisely and once by giving up. On CMP-10480 the drain grate
+    is found at 9% of the frame and again at 95%, and the second one traces
+    the pavement around it. The precise detection is always kept; only the
+    frame-sized one that contains it is dropped.
+    """
+    if len(dets) < 2:
+        return dets
+    keep = []
+    for d in dets:
+        if d.area_ratio < MANHOLE_MAX_FRAME:
+            keep.append(d)
+            continue
+        swallows_another = any(
+            o is not d and o.area_ratio < MANHOLE_MAX_FRAME
+            and _iou(o.box, d.box) > 0 and _contains(d.box, o.box)
+            for o in dets)
+        if not swallows_another:
+            keep.append(d)
+    return keep
+
+
+def _contains(outer: list[float], inner: list[float]) -> bool:
+    """True when `inner` sits almost entirely inside `outer`."""
+    ix = max(0.0, min(outer[2], inner[2]) - max(outer[0], inner[0]))
+    iy = max(0.0, min(outer[3], inner[3]) - max(outer[1], inner[1]))
+    inner_area = max((inner[2] - inner[0]) * (inner[3] - inner[1]), 1.0)
+    return (ix * iy) / inner_area >= 0.90
 
 
 def _local_potholes(img: np.ndarray, frame_area: float) -> list["Detection"]:

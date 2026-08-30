@@ -361,6 +361,30 @@ _seg_model = None
 _seg_failed = False
 
 
+def _seg_mirror_mask(img: np.ndarray, box: list[float]) -> "np.ndarray | None":
+    """The same trace on a mirrored image, flipped back into place."""
+    try:
+        w = img.shape[1]
+        flipped = cv2.flip(img, 1)
+        fbox = [w - box[2], box[1], w - box[0], box[3]]
+        res = _seg_model.predict(flipped, conf=SEG_TRACE_CONF, verbose=False)[0]
+        if res.masks is None or len(res.masks) == 0:
+            return None
+        best, best_iou = None, 0.0
+        for mb, mask in zip(res.boxes.xyxy, res.masks.data):
+            iou = _iou([float(v) for v in mb], fbox)
+            if iou > best_iou:
+                best, best_iou = mask, iou
+        if best is None or best_iou < SEG_MIN_BOX_IOU:
+            return None
+        m = best.cpu().numpy().astype(np.uint8)
+        if m.shape[:2] != img.shape[:2]:
+            m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        return cv2.flip(m, 1)
+    except Exception:
+        return None
+
+
 def _seg_outline(img: np.ndarray, box: list[float]) -> np.ndarray | None:
     """Largest contour the manhole segmentation model finds inside `box`."""
     global _seg_model, _seg_failed
@@ -380,6 +404,19 @@ def _seg_outline(img: np.ndarray, box: list[float]) -> np.ndarray | None:
         # A low bar on purpose: the decision that there IS a manhole here was
         # already made by the detector, so this is only asked where to put the
         # boundary. A weak trace that overlaps nothing is discarded below.
+        #
+        # Traced twice, once mirrored, and the two masks unioned. A segmentation
+        # model is not left-right symmetric: on a cover filling most of the
+        # frame it reliably clips one side, and mirroring moves the clip to the
+        # other side, so the union recovers the whole object. Measured on the
+        # three complaints reported as incompletely outlined, span of the
+        # detector's box covered by the trace:
+        #
+        #     CMP-10414   0.79 -> 0.92
+        #     CMP-10460   0.78 -> 0.88
+        #     CMP-10472   0.84 -> 0.89
+        #
+        # Costs one extra forward pass on a 10M-parameter model.
         res = _seg_model.predict(img, conf=SEG_TRACE_CONF, verbose=False)[0]
         if res.masks is None or len(res.masks) == 0:
             return None
@@ -394,6 +431,11 @@ def _seg_outline(img: np.ndarray, box: list[float]) -> np.ndarray | None:
         m = best.cpu().numpy().astype(np.uint8)
         if m.shape[:2] != img.shape[:2]:
             m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+        mirror = _seg_mirror_mask(img, box)
+        if mirror is not None:
+            m = cv2.bitwise_or(m, mirror)
+
         cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cnts = [c for c in cnts if cv2.contourArea(c) > 20]
         return max(cnts, key=cv2.contourArea) if cnts else None
@@ -445,6 +487,16 @@ OUTLINE_MIN_DOMINANCE = 0.90
 # constrained tracer narrows what can be outlined, it does not guarantee which
 # part gets outlined. So the floor stays at 0.95 and those two keep a rectangle.
 SEG_MIN_SOLIDITY = OUTLINE_MIN_SOLIDITY
+# Only a trace that already reaches this much of the detector's box may be
+# repaired by an ellipse fit -- see _ellipse_repair.
+ELLIPSE_REPAIR_MIN_SPAN = 0.85
+# ...and its convex hull must agree with its own ellipse fit this closely,
+# so only genuinely round objects are reshaped.
+ELLIPSE_REPAIR_MIN_IOU = 0.92
+# Bounds for the last-resort concave route -- see _accept_concave.
+CONCAVE_MIN_FILL = 0.35
+CONCAVE_MAX_FILL = 0.92
+CONCAVE_MIN_CONTAINMENT = 0.95
 SEG_MIN_BOX_IOU = 0.50
 OUTLINE_MIN_BOX_PX = 8
 
@@ -524,6 +576,71 @@ def _outline_from_point(img: np.ndarray, box: list[float]) -> list[list[float]] 
         return None
 
 
+def _mask_iou(a: np.ndarray, b: np.ndarray, box: list[float]) -> float:
+    """Overlap of two contours, rasterised over the detector's box."""
+    x0, y0 = int(box[0]), int(box[1])
+    w, h = max(int(box[2] - box[0]), 1), max(int(box[3] - box[1]), 1)
+    ma, mb = np.zeros((h, w), np.uint8), np.zeros((h, w), np.uint8)
+    cv2.drawContours(ma, [a - [x0, y0]], -1, 1, -1)
+    cv2.drawContours(mb, [b - [x0, y0]], -1, 1, -1)
+    union = int(np.count_nonzero(ma | mb))
+    return int(np.count_nonzero(ma & mb)) / union if union else 0.0
+
+
+def _ellipse_repair(cnt: np.ndarray, box: list[float]) -> list[list[int]] | None:
+    """Rescue a trace that reaches the whole object but has a ragged edge.
+
+    A manhole is a circle, so its outline in any photo is an ellipse. When the
+    segmentation mask spans the detector's box but snags on something at the
+    rim -- wet grass, a bystander's shoe -- the raggedness fails the solidity
+    test and a far worse outline gets used instead. Fitting an ellipse through
+    the mask's points recovers the real boundary: the fit is least-squares over
+    the whole contour, so a local excursion pulls it only slightly while the
+    hundreds of points along the true rim hold it in place.
+
+    Deliberately narrow. It only runs on a trace that already covers most of
+    the box, so a genuinely partial mask is never inflated into a full circle.
+    Measured on CMP-10472, where the shoe dropped solidity to 0.882:
+
+        ragged trace   span 0.89   solidity 0.882   (rejected)
+        ellipse fit    span 0.94   solidity 1.000   (traces the rim exactly)
+    """
+    if len(cnt) < 5:
+        return None
+    bw, bh = box[2] - box[0], box[3] - box[1]
+    x, y, w, h = cv2.boundingRect(cnt)
+    if (w * h) / max(bw * bh, 1) < ELLIPSE_REPAIR_MIN_SPAN:
+        return None
+    # Fitted through the convex hull rather than the raw contour, so the notch
+    # bitten out of the rim cannot drag the fit inwards.
+    hull = cv2.convexHull(cnt)
+    try:
+        (cx, cy), (aw, ah), ang = cv2.fitEllipse(hull)
+    except cv2.error:
+        return None
+    pts = cv2.ellipse2Poly((int(cx), int(cy)), (int(aw / 2), int(ah / 2)),
+                           int(ang), 0, 360, 6)
+    if len(pts) < 3:
+        return None
+    # Only reshape something that is genuinely round. A drain grate is a
+    # rectangle and a broken slab is an irregular polygon; forcing an ellipse
+    # onto either cuts its corners off. Comparing the *hull* against the
+    # ellipse separates the cases cleanly, where comparing the raw contour did
+    # not: a circle with a bite taken out of it still has a circular hull,
+    # while a rectangle's hull is a rectangle and can never fill more than
+    # about pi/4 of the ellipse drawn round it. Measured:
+    #
+    #     CMP-10472  round chamber, shoe at the rim   0.954  repaired
+    #     CMP-10480  rectangular drain grate          0.865  left alone
+    #     CMP-10254  broken slab                      0.793  left alone
+    if _mask_iou(hull, pts.reshape(-1, 1, 2), box) < ELLIPSE_REPAIR_MIN_IOU:
+        return None
+    # The fit may bulge a little past the detector's box; hold it inside.
+    pts[:, 0] = np.clip(pts[:, 0], box[0], box[2])
+    pts[:, 1] = np.clip(pts[:, 1], box[1], box[3])
+    return [[int(px), int(py)] for px, py in pts]
+
+
 def _outline(img: np.ndarray, box: list[float]) -> list[list[float]] | None:
     """Trace the object inside `box`. None when the trace is not trustworthy."""
     global _sam_model, _sam_failed
@@ -535,6 +652,9 @@ def _outline(img: np.ndarray, box: list[float]) -> list[list[float]] | None:
     trained = _seg_outline(img, [x1, y1, x2, y2])
     if trained is not None:
         poly = _accept_outline([trained], SEG_MIN_SOLIDITY)
+        if poly:
+            return poly
+        poly = _ellipse_repair(trained, [x1, y1, x2, y2])
         if poly:
             return poly
     if _sam_model is None:
@@ -557,10 +677,49 @@ def _outline(img: np.ndarray, box: list[float]) -> list[list[float]] | None:
             mask = cv2.resize(mask, (img.shape[1], img.shape[0]),
                               interpolation=cv2.INTER_NEAREST)
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        poly = _accept_outline([c for c in cnts if cv2.contourArea(c) > 20])
-        return poly if poly else _outline_from_point(img, [x1, y1, x2, y2])
+        cnts = [c for c in cnts if cv2.contourArea(c) > 20]
+        poly = _accept_outline(cnts)
+        if poly:
+            return poly
+        poly = _outline_from_point(img, [x1, y1, x2, y2])
+        if poly:
+            return poly
+        # Last resort, reached only when every route above has declined and the
+        # alternative is shipping no outline at all. A displaced cover is a
+        # slab with a bite out of one edge -- the gap it has slipped to expose,
+        # which is the hazard itself -- so it can never satisfy a convexity
+        # test. Judged here the way the point-prompt route is judged: one blob,
+        # sitting inside the detector's box, filling a believable share of it.
+        # On CMP-10404 SAM traces the tilted cover exactly and is turned away
+        # only for solidity 0.907.
+        return _accept_concave(cnts, [x1, y1, x2, y2])
     except Exception:
         return None
+
+
+def _accept_concave(cnts: list, box: list[float]) -> list[list[float]] | None:
+    """Accept a single well-placed blob without asking it to be convex."""
+    if not cnts:
+        return None
+    big = max(cnts, key=cv2.contourArea)
+    area = cv2.contourArea(big)
+    if area <= 0:
+        return None
+    if area / max(sum(cv2.contourArea(c) for c in cnts), 1.0) < OUTLINE_MIN_DOMINANCE:
+        return None
+    box_area = max((box[2] - box[0]) * (box[3] - box[1]), 1.0)
+    if not CONCAVE_MIN_FILL <= area / box_area <= CONCAVE_MAX_FILL:
+        return None
+    pts = big.reshape(-1, 2)
+    inside = np.count_nonzero(
+        (pts[:, 0] >= box[0] - 2) & (pts[:, 0] <= box[2] + 2)
+        & (pts[:, 1] >= box[1] - 2) & (pts[:, 1] <= box[3] + 2))
+    if inside / max(len(pts), 1) < CONCAVE_MIN_CONTAINMENT:
+        return None
+    pts = cv2.approxPolyDP(big, 0.004 * cv2.arcLength(big, True), True).reshape(-1, 2)
+    if len(pts) < 3:
+        return None
+    return [[round(float(x), 1), round(float(y), 1)] for x, y in pts]
 
 
 def _accept_outline(cnts: list, min_solidity: float = OUTLINE_MIN_SOLIDITY) -> list[list[float]] | None:

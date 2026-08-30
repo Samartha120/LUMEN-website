@@ -526,10 +526,14 @@ OUTLINE_MIN_DOMINANCE = 0.90
 SEG_MIN_SOLIDITY = OUTLINE_MIN_SOLIDITY
 # Only a trace that already reaches this much of the detector's box may be
 # repaired by an ellipse fit -- see _ellipse_repair.
-ELLIPSE_REPAIR_MIN_SPAN = 0.85
+ELLIPSE_REPAIR_MIN_SPAN = 0.75
 # ...and its convex hull must agree with its own ellipse fit this closely,
 # so only genuinely round objects are reshaped.
-ELLIPSE_REPAIR_MIN_IOU = 0.92
+ELLIPSE_REPAIR_MIN_IOU = 0.88
+# How far short of its own ellipse an already-accepted trace must fall before
+# it is treated as a circle with a slice cut off it. See _ellipse_repair.
+ELLIPSE_TRUNCATED_MIN = 1.10
+ELLIPSE_TRUNCATED_MAX = 1.45
 # Bounds for the last-resort concave route -- see _accept_concave.
 CONCAVE_MIN_FILL = 0.35
 CONCAVE_MAX_FILL = 0.92
@@ -635,7 +639,8 @@ def _mask_iou(a: np.ndarray, b: np.ndarray, box: list[float]) -> float:
     return int(np.count_nonzero(ma & mb)) / union if union else 0.0
 
 
-def _ellipse_repair(cnt: np.ndarray, box: list[float]) -> list[list[int]] | None:
+def _ellipse_repair(cnt: np.ndarray, box: list[float],
+                    already_accepted: bool = False) -> list[list[int]] | None:
     """Rescue a trace that reaches the whole object but has a ragged edge.
 
     A manhole is a circle, so its outline in any photo is an ellipse. When the
@@ -683,6 +688,17 @@ def _ellipse_repair(cnt: np.ndarray, box: list[float]) -> list[list[int]] | None
     #     CMP-10254  broken slab                      0.793  left alone
     if _mask_iou(hull, pts.reshape(-1, 1, 2), box) < ELLIPSE_REPAIR_MIN_IOU:
         return None
+    if already_accepted:
+        # Overruling a trace that passed the shape gate needs stronger grounds
+        # than rescuing one that failed it, so the shortfall must look like a
+        # slice off a circle: enough missing to matter, not so much that the
+        # ellipse is inventing an object. Measured over all 61 manholes, only
+        # CMP-10460 qualifies -- its trace covers 1/1.29 of its own ellipse.
+        # CMP-10404, a displaced rectangular cover, is turned away at 2.29,
+        # and the correctly traced small openings sit at 1.06 to 1.09.
+        shortfall = cv2.contourArea(pts) / max(cv2.contourArea(cnt), 1.0)
+        if not ELLIPSE_TRUNCATED_MIN < shortfall <= ELLIPSE_TRUNCATED_MAX:
+            return None
     # The fit may bulge a little past the detector's box; hold it inside.
     pts[:, 0] = np.clip(pts[:, 0], box[0], box[2])
     pts[:, 1] = np.clip(pts[:, 1], box[1], box[3])
@@ -700,17 +716,23 @@ def _outline(img: np.ndarray, box: list[float]) -> list[list[float]] | None:
     trained = _seg_outline(img, [x1, y1, x2, y2])
     if trained is not None:
         poly = _accept_outline([trained], SEG_MIN_SOLIDITY)
-        if poly:
-            return poly
         # Not attempted when the box is most of the photograph: there is no
         # background left for the rim to sit against, and the fit lands on
         # whatever fills the frame. CMP-10387 is a cable chamber shot at 98%
         # of the frame, where this drew an arc across the whole image.
         frame_frac = ((x2 - x1) * (y2 - y1)) / max(img.shape[0] * img.shape[1], 1)
         if frame_frac < MANHOLE_MAX_FRAME:
-            poly = _ellipse_repair(trained, [x1, y1, x2, y2])
-            if poly:
-                return poly
+            # Tried even when the trace passed the gate above. A mask sliced
+            # off flat down one side is still convex, so it satisfies every
+            # test and ships looking like a letter D. CMP-10460 is a round
+            # cover whose trace is cut straight down the left edge at solidity
+            # 0.986 -- nothing in the shape gate objects to it.
+            repaired = _ellipse_repair(trained, [x1, y1, x2, y2],
+                                       already_accepted=poly is not None)
+            if repaired:
+                return repaired
+        if poly:
+            return poly
     if _sam_model is None:
         if not SAM_WEIGHTS.exists():
             _sam_failed = True

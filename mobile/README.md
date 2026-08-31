@@ -92,11 +92,23 @@ request carries no `Origin` header, so CORS never applies to it.
 
 ## What the app does
 
-- **Report** — camera or gallery, a one-line description, and the location if
-  granted. Location is a convenience, never a blocker.
-- **My reports** — only the reports you filed. That scoping is enforced in the
-  database query, not filtered afterwards, so another resident's complaint never
-  leaves the server.
+- **Report** — up to five photographs from the camera or gallery, a one-line
+  description, and the location if granted. Location is a convenience, never a
+  blocker.
+- **Check what the AI sees** — runs the detector over the photo and shows the
+  outlines, classes, confidences and severity **before anything is filed**. If
+  the photo is too dark, too far away or of the wrong thing, it can be retaken
+  on the spot rather than rejected hours later. Nothing is written server-side,
+  so checking three angles leaves no half-complaints behind.
+- **Works offline** — with no signal the report is written to the device and
+  sent by itself when the network returns. Civic damage is often exactly where
+  there is no coverage, and the person standing in front of the hazard will not
+  walk back.
+- **My reports** — only the reports you filed, with search, open/resolved
+  filters, and a count of what you have filed and what has been resolved. That
+  scoping is enforced in the database query, not filtered afterwards, so another
+  resident's complaint never leaves the server.
+- **Updates** — status changes on your reports, with an unread badge.
 - **Detail** — the annotated image the detector produced, what it found and with
   what confidence, the severity, and the progress timeline.
 

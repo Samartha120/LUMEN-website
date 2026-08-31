@@ -124,6 +124,48 @@ router.get("/:ref", requireAuth, async (req, res) => {
 
 // POST /api/complaints  (Features 1,2,3)
 // Citizens may report; only staff may do anything else to a complaint.
+// POST /api/complaints/preview
+//
+// Run the detector over a photograph and return what it found, without
+// creating anything. The mobile app calls this before filing so the reporter
+// can see what the model sees while they are still standing in front of the
+// damage — if the photo is too dark, too far away, or of the wrong thing, they
+// can retake it there and then instead of finding out from a rejection notice
+// hours later.
+//
+// Deliberately writes nothing: no complaint, no image on disk, no timeline, no
+// audit entry. A reporter checking three angles before choosing one must not
+// leave three half-complaints behind.
+router.post("/preview", requireAuth, upload.single("photo"), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: "A photograph is required." });
+  if (!file.mimetype.startsWith("image/"))
+    return res.status(400).json({ error: "That file is not an image." });
+
+  let result: DetectResult;
+  try {
+    result = await detect(file.buffer, file.originalname, file.mimetype);
+  } catch (e) {
+    if (e instanceof AiUnavailableError) return res.status(503).json({ error: e.message });
+    return res.status(500).json({ error: e instanceof Error ? e.message : "Image analysis failed." });
+  }
+
+  const top = [...result.detections].sort((a, b) => b.confidence - a.confidence)[0];
+  res.json({
+    looksCivic: result.scene ? result.scene.looks_civic : true,
+    // The service owns this wording so the app and the API cannot drift apart.
+    message: result.message ?? null,
+    hint: result.hint ?? null,
+    category: top?.label ?? null,
+    detections: result.detections.map((d) => ({
+      label: d.label, confidence: d.confidence, box: d.box, polygon: d.polygon ?? null,
+    })),
+    severity: result.severity,
+    annotated: `data:image/png;base64,${result.annotated_png_b64}`,
+    modelMode: result.model_mode,
+  });
+});
+
 router.post("/", requireAuth, requireRole("SUPERVISOR", "ADMINISTRATOR", "CITIZEN"), upload.array("photos", MAX_PHOTOS), async (req, res) => {
   const s = req.session!;
   const b = req.body ?? {};

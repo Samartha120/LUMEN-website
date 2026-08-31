@@ -5,6 +5,10 @@ export type Detection = {
   confidence: number;
   box: [number, number, number, number];
   area_ratio: number;
+  // Present only for the classes the service outlines — manholes, open and
+  // closed. Everything else is reported as a box. See POLYGON_CLASSES in
+  // ai-service/model.py.
+  polygon?: [number, number][] | null;
 };
 export type Severity = {
   score: number;

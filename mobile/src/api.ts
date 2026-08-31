@@ -99,6 +99,72 @@ export async function complaint(ref: string) {
   return body.complaint as ComplaintDetail;
 }
 
+/** A local file, shaped the way React Native's FormData expects. */
+function asFilePart(uri: string) {
+  const name = uri.split("/").pop() || "photo.jpg";
+  const ext = (name.split(".").pop() || "jpg").toLowerCase();
+  return {
+    uri,
+    name,
+    type: ext === "png" ? "image/png" : "image/jpeg",
+  } as unknown as Blob;
+}
+
+/**
+ * Ask what the detector makes of a photograph, without filing anything.
+ *
+ * This is the whole point of the app sitting on this platform rather than
+ * beside it: the reporter sees what the model sees while they are still
+ * standing in front of the damage. A photo that is too dark, too far away or
+ * of the wrong thing can be retaken on the spot instead of being rejected
+ * hours later. Nothing is written server-side, so checking three angles before
+ * choosing one leaves no half-complaints behind.
+ */
+export async function previewPhoto(uri: string) {
+  const form = new FormData();
+  form.append("photo", asFilePart(uri));
+  const res = await fetch(`${API_URL}/api/complaints/preview`, {
+    method: "POST",
+    headers: await authHeaders(),
+    body: form,
+  });
+  return (await parse(res)) as Preview;
+}
+
+export async function notifications() {
+  const res = await fetch(`${API_URL}/api/notifications`, { headers: await authHeaders() });
+  const body = await parse(res);
+  return body as { notifications: Notification[]; unread: number };
+}
+
+export async function markNotificationsRead(id?: string) {
+  await fetch(`${API_URL}/api/notifications/read`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify(id ? { id } : {}),
+  });
+}
+
+export type Preview = {
+  looksCivic: boolean;
+  message: string | null;
+  hint: string | null;
+  category: string | null;
+  detections: { label: string; confidence: number; polygon?: number[][] | null }[];
+  severity: { score: number; priority: string; band: string; instances: number };
+  annotated: string;
+  modelMode: string;
+};
+
+export type Notification = {
+  id: string;
+  title: string;
+  body: string | null;
+  readAt: string | null;
+  createdAt: string;
+  complaint?: { ref: string; title: string; status: string } | null;
+};
+
 /**
  * File a report.
  *
@@ -109,7 +175,7 @@ export async function complaint(ref: string) {
  */
 export async function submitReport(opts: {
   title: string;
-  photoUri: string;
+  photoUris: string[];
   lat?: number | null;
   lng?: number | null;
 }) {
@@ -117,13 +183,10 @@ export async function submitReport(opts: {
   form.append("title", opts.title);
   if (opts.lat != null) form.append("lat", String(opts.lat));
   if (opts.lng != null) form.append("lng", String(opts.lng));
-  const name = opts.photoUri.split("/").pop() || "photo.jpg";
-  const ext = (name.split(".").pop() || "jpg").toLowerCase();
-  form.append("photos", {
-    uri: opts.photoUri,
-    name,
-    type: ext === "png" ? "image/png" : "image/jpeg",
-  } as unknown as Blob);
+  // Several angles are worth sending: the server analyses every one and picks
+  // whichever found the most damage to classify and route the complaint, so a
+  // wide shot for context plus a close one for the defect beats either alone.
+  for (const uri of opts.photoUris) form.append("photos", asFilePart(uri));
 
   const res = await fetch(`${API_URL}/api/complaints`, {
     method: "POST",

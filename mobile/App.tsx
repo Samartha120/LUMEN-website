@@ -4,21 +4,23 @@ import {
   StyleSheet, Text, View, Platform,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { clearToken, loadToken, me } from "./src/api";
+import { clearToken, loadToken, me, notifications } from "./src/api";
+import { flushOutbox } from "./src/outbox";
 import LoginScreen from "./src/screens/LoginScreen";
 import ReportScreen from "./src/screens/ReportScreen";
 import MyReportsScreen from "./src/screens/MyReportsScreen";
+import AlertsScreen from "./src/screens/AlertsScreen";
 import DetailScreen from "./src/screens/DetailScreen";
 import { T } from "./src/theme";
 
-type Tab = "report" | "reports";
+type Tab = "report" | "reports" | "alerts";
 
 /**
  * Navigation is a piece of state rather than a router.
  *
- * There are three places to be — file a report, see your reports, open one —
- * and no deep links or back stack to preserve. A router would be a dependency
- * and a build step for something a union type already expresses.
+ * There are four places to be — file a report, see your reports, read updates,
+ * open one report — and no deep links or back stack to preserve. A router
+ * would be a dependency and a build step for what a union type expresses.
  */
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -26,6 +28,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("report");
   const [openRef, setOpenRef] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [unread, setUnread] = useState(0);
 
   // A stored token may be expired or from a server that has since been reset,
   // so it is checked against /me rather than trusted on sight.
@@ -38,6 +41,17 @@ export default function App() {
       setChecking(false);
     })();
   }, []);
+
+  // Anything written down while offline goes out as soon as the app opens with
+  // a signal, without the user having to remember it is there.
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      const { sent } = await flushOutbox();
+      if (sent.length) setReloadKey((k) => k + 1);
+      try { setUnread((await notifications()).unread ?? 0); } catch { /* offline */ }
+    })();
+  }, [user, reloadKey]);
 
   async function signOut() {
     await clearToken();
@@ -81,8 +95,10 @@ export default function App() {
           <ReportScreen
             onFiled={() => { setReloadKey((k) => k + 1); setTab("reports"); }}
           />
-        ) : (
+        ) : tab === "reports" ? (
           <MyReportsScreen onOpen={setOpenRef} reloadKey={reloadKey} />
+        ) : (
+          <AlertsScreen onOpen={setOpenRef} onRead={() => setReloadKey((k) => k + 1)} />
         )}
       </View>
 
@@ -95,6 +111,17 @@ export default function App() {
           <Pressable style={s.tab} onPress={() => { setTab("reports"); setReloadKey((k) => k + 1); }}>
             <Text style={[s.tabIcon, tab === "reports" && s.tabOn]}>☰</Text>
             <Text style={[s.tabText, tab === "reports" && s.tabOn]}>My reports</Text>
+          </Pressable>
+          <Pressable style={s.tab} onPress={() => { setTab("alerts"); setReloadKey((k) => k + 1); }}>
+            <View>
+              <Text style={[s.tabIcon, tab === "alerts" && s.tabOn]}>🔔</Text>
+              {unread > 0 && (
+                <View style={s.badge}>
+                  <Text style={s.badgeText}>{unread > 9 ? "9+" : unread}</Text>
+                </View>
+              )}
+            </View>
+            <Text style={[s.tabText, tab === "alerts" && s.tabOn]}>Updates</Text>
           </Pressable>
         </View>
       )}
@@ -124,4 +151,10 @@ const s = StyleSheet.create({
   tabIcon: { fontSize: 20, color: T.muted },
   tabText: { fontSize: 12, color: T.muted, marginTop: 2, fontWeight: "600" },
   tabOn: { color: T.navy },
+  badge: {
+    position: "absolute", top: -4, right: -10, backgroundColor: T.bad,
+    minWidth: 17, height: 17, borderRadius: 9, alignItems: "center",
+    justifyContent: "center", paddingHorizontal: 4,
+  },
+  badgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
 });

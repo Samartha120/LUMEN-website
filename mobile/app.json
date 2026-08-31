@@ -5,8 +5,13 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "splash": { "backgroundColor": "#1e2a78", "resizeMode": "contain" },
-    "assetBundlePatterns": ["**/*"],
+    "splash": {
+      "backgroundColor": "#1e2a78",
+      "resizeMode": "contain"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "gov.lumen.report",
@@ -18,11 +23,20 @@
     },
     "android": {
       "package": "gov.lumen.report",
-      "adaptiveIcon": { "backgroundColor": "#1e2a78" },
-      "permissions": ["CAMERA", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+      "adaptiveIcon": {
+        "backgroundColor": "#1e2a78"
+      },
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
     },
     "extra": {
       "apiUrl": "http://localhost:4000"
-    }
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }

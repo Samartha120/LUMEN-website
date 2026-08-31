@@ -547,9 +547,9 @@ MANHOLE_LOOSE_FRAME = 0.80
 MANHOLE_MAX_FRAME = 0.90
 # Open-versus-closed judgement -- see _manhole_is_open.
 MANHOLE_VOID_LEVEL = 60        # 0-255; below this is unlit, not shadowed
-MANHOLE_VOID_FRACTION = 0.20   # ...or this much of it is void overall
-MANHOLE_OPENING_FRACTION = 0.15  # one hole this big is a hole to fall into
-MANHOLE_VOID_RELATIVE = 0.50   # ...and it must be this dark vs the pavement
+# One opening covering this much of the manhole's own footprint is a hole
+# you could step into. Below it, the cover is still doing its job.
+MANHOLE_OPENING_FRACTION = 0.055
 MANHOLE_SURROUND_PX = 30       # width of the pavement reference ring
 # The multi-class model may point at a manhole, never label one.
 MULTICLASS_MANHOLE_LOCATOR = os.environ.get("LUMEN_MC_MANHOLE", "1") == "1"
@@ -834,58 +834,50 @@ _manhole_failed = False
 
 def _manhole_is_open(img: np.ndarray, box: list[float],
                     polygon: "list | None") -> bool:
-    """Is the shaft exposed, or is the cover seated in it?
+    """Is there an opening here big enough to fall into?
 
-    The detectors answer "there is a manhole here" and are unreliable on this
-    second question -- the multi-class model was trained with intact covers as
-    positives, so it calls a seated cover a fall hazard at 0.88. The picture
-    answers it directly instead: an open shaft contains a void, a few hundred
-    millimetres of unlit space that no amount of daylight reaches, while a
-    seated cover is a lit surface roughly as bright as the pavement it sits in.
+    The detectors cannot answer this. The multi-class model was trained with
+    intact covers as positives -- the reason its Open Manhole class is withheld
+    in UNTRUSTED_MULTICLASS -- so it calls a seated cover a hazard at 0.88. The
+    picture answers it instead: an open shaft contains a void, unlit space that
+    daylight does not reach, while a cover is a lit surface about as bright as
+    the pavement around it.
 
-    Two measurements inside the traced outline, both relative to the pavement
-    immediately around it so that shade, exposure and time of day cancel:
+    What matters is the size of the opening against the size of the manhole,
+    not against the outline that was traced. Measuring inside the outline is
+    what an earlier version did, and it is degenerate whenever the tracer has
+    followed the hole rather than the cover: on CMP-10254 the outline IS the
+    small break in the slab, so the interior was 100% void and a plainly
+    covered manhole was called open. Against the detector's box that same
+    break is 1.8%, which is what it looks like to anyone standing over it.
 
-        void      how much of the interior is genuinely near-black
-        rel_dark  the interior's dark quartile against the surrounding median
-
-    Measured over every manhole in the corpus these do not overlap. Open shafts
-    run from 0.01 to 0.37 relative darkness with 12-90% void; seated covers run
-    from 0.49 to 1.08 with 0.4-8% void. CMP-10311 -- an intact cover shipped as
-    an Open Manhole -- sits at 0.94 with 0.8% void. The open shaft the user
-    photographed sits at 0.01 with 74%.
+    The darkness threshold is taken from the surrounding pavement rather than
+    fixed, so a shaded cover is not mistaken for a void.
     """
     try:
         grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         x1, y1, x2, y2 = (int(v) for v in box)
+        box_area = max((x2 - x1) * (y2 - y1), 1)
         inside_mask = np.zeros(grey.shape, np.uint8)
         if polygon:
             cv2.fillPoly(inside_mask, [np.array(polygon, np.int32)], 1)
         else:
             cv2.rectangle(inside_mask, (x1, y1), (x2, y2), 1, -1)
-        # The pavement: a margin around the object, excluding the object.
         pad = MANHOLE_SURROUND_PX
         ring = np.zeros(grey.shape, np.uint8)
         cv2.rectangle(ring, (max(0, x1 - pad), max(0, y1 - pad)),
                       (x2 + pad, y2 + pad), 1, -1)
         ring = cv2.bitwise_and(ring, 1 - inside_mask)
-        inside, outside = grey[inside_mask == 1], grey[ring == 1]
-        if inside.size < 50 or outside.size < 50:
-            return True     # cannot tell; the hazard reading is the safe one
-        void = float((inside < MANHOLE_VOID_LEVEL).mean())
-        rel_dark = float(np.percentile(inside, 15)) / max(float(np.median(outside)), 1.0)
-        if rel_dark > MANHOLE_VOID_RELATIVE:
-            return False
-        # One large opening, or an interior that is mostly void. A cover broken
-        # right through still counts as closed: the holes in CMP-10488 come to
-        # 13% of its face, but the largest single one is 3.6% -- you cannot
-        # step into it, and the cover is plainly still sitting in the ring.
-        # What matters is whether there is a hole to fall into, not how much
-        # dark there is in total.
-        dark = ((grey < MANHOLE_VOID_LEVEL) & (inside_mask == 1)).astype(np.uint8)
+        outside = grey[ring == 1]
+        if outside.size < 50:
+            return True     # nothing to compare against; assume the hazard
+        level = min(MANHOLE_VOID_LEVEL, float(np.median(outside)) * 0.45)
+        dark = ((grey < level) & (inside_mask == 1)).astype(np.uint8)
         count, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
-        largest = (int(stats[1:, cv2.CC_STAT_AREA].max()) if count > 1 else 0) / inside.size
-        return largest >= MANHOLE_OPENING_FRACTION or void >= MANHOLE_VOID_FRACTION
+        if count <= 1:
+            return False
+        largest = int(stats[1:, cv2.CC_STAT_AREA].max()) / box_area
+        return largest >= MANHOLE_OPENING_FRACTION
     except Exception:
         return True
 

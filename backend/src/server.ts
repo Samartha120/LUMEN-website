@@ -16,9 +16,16 @@ import dataRoutes from "./routes/data.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT ?? 4000);
-const ORIGIN = process.env.FRONTEND_ORIGIN ?? "http://localhost:5173";
+// Comma-separated, so the deployed web app and a local one can both be served
+// without a rebuild. The mobile app is not affected either way: a native
+// request carries no Origin header, so CORS never applies to it.
+const ORIGINS = (process.env.FRONTEND_ORIGIN ?? "http://localhost:5173")
+  .split(",").map((o) => o.trim()).filter(Boolean);
 
-app.use(cors({ origin: ORIGIN, credentials: true }));
+app.use(cors({
+  origin: (origin, cb) => cb(null, !origin || ORIGINS.includes(origin)),
+  credentials: true,
+}));
 app.use(express.json());
 app.use(cookieParser());
 app.use(attachSession);
@@ -34,5 +41,5 @@ app.use("/api", dataRoutes);
 app.get("/api/ping", (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
-  console.log(`LUMEN backend on http://localhost:${PORT} (CORS origin ${ORIGIN})`);
+  console.log(`LUMEN backend on http://localhost:${PORT} (CORS origins ${ORIGINS.join(", ")})`);
 });

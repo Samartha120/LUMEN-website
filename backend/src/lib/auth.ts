@@ -42,9 +42,21 @@ declare global {
   }
 }
 
-/** Populate req.session from the cookie if present (does not block). */
+/** Populate req.session from the cookie, or a bearer token (does not block).
+ *
+ * The browser keeps its session in an httpOnly cookie, which JavaScript cannot
+ * read and which the mobile app cannot use — a native app has no cookie jar
+ * tied to an origin. It sends the same signed token in an Authorization header
+ * instead. The token is identical in both cases, so there is one session
+ * format, one secret and one expiry, not a second auth system for the phone.
+ *
+ * The cookie is read first, so a browser cannot be tricked into authenticating
+ * as someone else by a header an attacker managed to attach.
+ */
 export async function attachSession(req: Request, _res: Response, next: NextFunction) {
-  req.session = (await readSession(req.cookies?.[COOKIE])) ?? undefined;
+  const header = req.headers.authorization;
+  const bearer = header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
+  req.session = (await readSession(req.cookies?.[COOKIE] ?? bearer)) ?? undefined;
   next();
 }
 

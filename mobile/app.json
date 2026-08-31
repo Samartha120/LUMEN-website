@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "LUMEN Report",
+    "slug": "lumen-report",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": { "backgroundColor": "#1e2a78", "resizeMode": "contain" },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "gov.lumen.report",
+      "infoPlist": {
+        "NSCameraUsageDescription": "LUMEN uses the camera to photograph the damage you are reporting.",
+        "NSPhotoLibraryUsageDescription": "LUMEN attaches a photograph of the damage to your report.",
+        "NSLocationWhenInUseUsageDescription": "LUMEN tags your report with its location so the right department is assigned."
+      }
+    },
+    "android": {
+      "package": "gov.lumen.report",
+      "adaptiveIcon": { "backgroundColor": "#1e2a78" },
+      "permissions": ["CAMERA", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    },
+    "extra": {
+      "apiUrl": "http://localhost:4000"
+    }
+  }
+}

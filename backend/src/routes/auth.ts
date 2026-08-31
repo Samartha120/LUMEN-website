@@ -31,7 +31,12 @@ router.post("/login", async (req, res) => {
   });
 
   res.cookie(COOKIE, token, { httpOnly: true, sameSite: "lax", maxAge: 12 * 3600 * 1000 });
-  res.json({ user: session });
+  // The mobile app cannot read the cookie, so it asks for the token in the
+  // body and stores it itself. Only returned when explicitly requested: the
+  // web app never asks, so its session stays in the httpOnly cookie where a
+  // cross-site script cannot reach it.
+  const wantsToken = String(req.body?.client ?? "") === "mobile";
+  res.json(wantsToken ? { user: session, token } : { user: session });
 });
 
 /**
@@ -74,7 +79,10 @@ router.post("/register", async (req, res) => {
   });
 
   res.cookie(COOKIE, token, { httpOnly: true, sameSite: "lax", maxAge: 12 * 3600 * 1000 });
-  res.status(201).json({ user: session });
+  // Same rule as sign-in: the token is handed back only to a client that
+  // cannot use the cookie. See the note there.
+  const wantsToken = String(req.body?.client ?? "") === "mobile";
+  res.status(201).json(wantsToken ? { user: session, token } : { user: session });
 });
 
 router.post("/logout", async (req, res) => {

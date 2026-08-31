@@ -30,6 +30,7 @@ export const CLASSES: Record<string, { category: CategoryKey; weight: number }> 
   "Overflowing Bin":    { category: "WASTE", weight: 0.45 },
   // Water
   "Open Manhole":       { category: "WATER", weight: 1.0 },
+  "Closed Manhole":     { category: "WATER", weight: 0.05 },
 };
 
 export const ALL_CLASSES = Object.keys(CLASSES);

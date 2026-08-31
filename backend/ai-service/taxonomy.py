@@ -51,6 +51,9 @@ CLASSES: dict[str, dict] = {
     "Overflowing Bin":     {"category": "WASTE",  "weight": 0.45, "yolo_id": 4},
     # --- Water
     "Open Manhole":        {"category": "WATER",  "weight": 1.00, "yolo_id": 5},
+    # Not damage -- an intact cover. Carried so it can be named rather than
+    # left Unclassified; weighted so it never outranks a hazard.
+    "Closed Manhole":      {"category": "WATER",  "weight": 0.05, "yolo_id": None},
 }
 
 # RDD2022 raw codes -> our labels. Only the codes we still model are listed.
@@ -61,9 +64,13 @@ RDD_ALIASES = {
 
 DEFAULT_WEIGHT = 0.5
 
-# Class list in checkpoint order.
+# Class list in checkpoint order. Classes with no `yolo_id` are not predicted
+# by any model — Closed Manhole is decided from the image after detection — so
+# they have no place in a checkpoint's class list or in a training label map.
 YOLO_NAMES: list[str] = [
-    name for name, _ in sorted(CLASSES.items(), key=lambda kv: kv[1]["yolo_id"])
+    name for name, spec in sorted(
+        (kv for kv in CLASSES.items() if kv[1].get("yolo_id") is not None),
+        key=lambda kv: kv[1]["yolo_id"])
 ]
 
 # Contiguous 0..n-1 indices for TRAINING a fresh model. `yolo_id` tracks the

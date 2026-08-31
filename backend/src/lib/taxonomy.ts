@@ -30,6 +30,10 @@ export const CLASSES: Record<string, { category: CategoryKey; weight: number }> 
   "Overflowing Bin":    { category: "WASTE", weight: 0.45 },
   // Water
   "Open Manhole":       { category: "WATER", weight: 1.0 },
+  // A cover that is seated. Reported so the platform can say the shaft is
+  // safe rather than nothing at all, but it is not damage, so it carries
+  // almost no weight and must never outrank a real hazard in the queue.
+  "Closed Manhole":     { category: "WATER", weight: 0.05 },
 };
 
 export const ALL_CLASSES = Object.keys(CLASSES);

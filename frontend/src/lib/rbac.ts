@@ -85,4 +85,5 @@ export const DAMAGE_CLASSES = [
   "Pothole",
   "Garbage Pile",
   "Open Manhole",
+  "Closed Manhole",
 ];

@@ -40,6 +40,7 @@ export const BASE_COST: Record<string, number> = {
   "Garbage Pile": 6_000,
   "Overflowing Bin": 3_000,
   "Open Manhole": 15_000,
+  "Closed Manhole": 0,
 };
 
 const DEFAULT_COST = 20_000;

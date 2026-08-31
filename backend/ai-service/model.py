@@ -329,7 +329,8 @@ MANHOLE_AGREE_CONF = float(os.environ.get("LUMEN_MANHOLE_AGREE_CONF", "0.25"))
 # Enforced here rather than at each tracer so no future source can reintroduce
 # a polygon on a class that is not meant to have one.
 POLYGON_CLASSES = {
-    c.strip() for c in os.environ.get("LUMEN_POLYGON_CLASSES", "Open Manhole").split(",")
+    c.strip() for c in os.environ.get(
+        "LUMEN_POLYGON_CLASSES", "Open Manhole,Closed Manhole").split(",")
     if c.strip()
 }
 
@@ -544,6 +545,16 @@ SEG_UNION_MAX_SPAN = 0.98
 # not a close-up. See _manholes and _drop_frame_duplicates.
 MANHOLE_LOOSE_FRAME = 0.80
 MANHOLE_MAX_FRAME = 0.90
+# Open-versus-closed judgement -- see _manhole_is_open.
+MANHOLE_VOID_LEVEL = 60        # 0-255; below this is unlit, not shadowed
+MANHOLE_VOID_FRACTION = 0.12   # this much of the interior must be void
+MANHOLE_VOID_RELATIVE = 0.50   # ...and it must be this dark vs the pavement
+MANHOLE_SURROUND_PX = 30       # width of the pavement reference ring
+# The multi-class model may point at a manhole, never label one.
+MULTICLASS_MANHOLE_LOCATOR = os.environ.get("LUMEN_MC_MANHOLE", "1") == "1"
+MULTICLASS_MANHOLE_CONF = float(os.environ.get("LUMEN_MC_MANHOLE_CONF", "0.60"))
+CLOSED_MANHOLE = "Closed Manhole"
+MANHOLE_LABELS = {"Open Manhole", CLOSED_MANHOLE}
 # A box drawn around an already-kept, more confident box of the same class is
 # a duplicate of it at a looser scale. See _nms.
 CONTAINER_DROP = 0.90
@@ -818,6 +829,53 @@ def _accept_outline(cnts: list, min_solidity: float = OUTLINE_MIN_SOLIDITY) -> l
     return [[round(float(x), 1), round(float(y), 1)] for x, y in pts]
 _manhole_model = None
 _manhole_failed = False
+
+
+def _manhole_is_open(img: np.ndarray, box: list[float],
+                    polygon: "list | None") -> bool:
+    """Is the shaft exposed, or is the cover seated in it?
+
+    The detectors answer "there is a manhole here" and are unreliable on this
+    second question -- the multi-class model was trained with intact covers as
+    positives, so it calls a seated cover a fall hazard at 0.88. The picture
+    answers it directly instead: an open shaft contains a void, a few hundred
+    millimetres of unlit space that no amount of daylight reaches, while a
+    seated cover is a lit surface roughly as bright as the pavement it sits in.
+
+    Two measurements inside the traced outline, both relative to the pavement
+    immediately around it so that shade, exposure and time of day cancel:
+
+        void      how much of the interior is genuinely near-black
+        rel_dark  the interior's dark quartile against the surrounding median
+
+    Measured over every manhole in the corpus these do not overlap. Open shafts
+    run from 0.01 to 0.37 relative darkness with 12-90% void; seated covers run
+    from 0.49 to 1.08 with 0.4-8% void. CMP-10311 -- an intact cover shipped as
+    an Open Manhole -- sits at 0.94 with 0.8% void. The open shaft the user
+    photographed sits at 0.01 with 74%.
+    """
+    try:
+        grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        x1, y1, x2, y2 = (int(v) for v in box)
+        inside_mask = np.zeros(grey.shape, np.uint8)
+        if polygon:
+            cv2.fillPoly(inside_mask, [np.array(polygon, np.int32)], 1)
+        else:
+            cv2.rectangle(inside_mask, (x1, y1), (x2, y2), 1, -1)
+        # The pavement: a margin around the object, excluding the object.
+        pad = MANHOLE_SURROUND_PX
+        ring = np.zeros(grey.shape, np.uint8)
+        cv2.rectangle(ring, (max(0, x1 - pad), max(0, y1 - pad)),
+                      (x2 + pad, y2 + pad), 1, -1)
+        ring = cv2.bitwise_and(ring, 1 - inside_mask)
+        inside, outside = grey[inside_mask == 1], grey[ring == 1]
+        if inside.size < 50 or outside.size < 50:
+            return True     # cannot tell; the hazard reading is the safe one
+        void = float((inside < MANHOLE_VOID_LEVEL).mean())
+        rel_dark = float(np.percentile(inside, 15)) / max(float(np.median(outside)), 1.0)
+        return void >= MANHOLE_VOID_FRACTION and rel_dark <= MANHOLE_VOID_RELATIVE
+    except Exception:
+        return True
 
 
 def _manholes(img: np.ndarray, frame_area: float) -> list["Detection"]:
@@ -1848,9 +1906,31 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
         # or alligator cracks, so those complaints record zero detections and
         # route as Unclassified. Potholes are unaffected — they come from
         # models/pothole_best.pt, which was retrained.
-        main_dets = ([d for d in _predict(model, img, conf, frame_area)
-                      if d.label not in UNTRUSTED_MULTICLASS]
-                     if USE_MULTICLASS_MODEL else [])
+        multiclass_raw = _predict(model, img, conf, frame_area) if USE_MULTICLASS_MODEL else []
+        main_dets = [d for d in multiclass_raw if d.label not in UNTRUSTED_MULTICLASS]
+
+        # The multi-class model's "Open Manhole" is withheld above because it
+        # cannot tell an open shaft from a seated cover -- it was trained with
+        # intact covers as positives. But it is a good finder: it puts a box on
+        # a cover the dedicated detector misses entirely, at 0.88 on the closed
+        # cover in CMP-10490, where the dedicated model manages only a
+        # frame-filling 0.32. Now that open-versus-closed is decided from the
+        # picture, that weakness no longer matters and the find is worth having.
+        #
+        # Admitted as a location only, and only on strong evidence: high
+        # confidence, corroborated by the segmentation model, and not a
+        # frame-filling box. The failure that got the class withheld -- a
+        # manhole invented at 0.34 on a rubbish pile -- is well under the bar.
+        mc_manholes: list[Detection] = []
+        if MULTICLASS_MANHOLE_LOCATOR:
+            for d in multiclass_raw:
+                if d.label != "Open Manhole" or d.confidence < MULTICLASS_MANHOLE_CONF:
+                    continue
+                if frame_area and (d.area_ratio or 0) >= MANHOLE_LOOSE_FRAME:
+                    continue
+                if _seg_agreement(img, d.box) < MANHOLE_AGREE_CONF:
+                    continue
+                mc_manholes.append(d)
 
         # The segmentation specialist no longer contributes detections of its
         # own — it only traces an outline over a pothole another model already
@@ -1913,6 +1993,10 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
         # only source of it, and it is the retrained one that treats a closed
         # cover as background rather than as a hazard.
         manholes = _manholes(img, frame_area)
+        # Locations the multi-class model found and the dedicated one did not.
+        for d in mc_manholes:
+            if not any(_iou(d.box, m.box) > 0.30 for m in manholes):
+                manholes.append(d)
         if manholes:
             detector = detector + "+MANHOLE" if detector else "MANHOLE"
 
@@ -2022,7 +2106,7 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
         if OUTLINE_MANHOLES:
             outlined = 0
             for d in dets:
-                if d.label != "Open Manhole" or d.polygon:
+                if d.label not in MANHOLE_LABELS or d.polygon:
                     continue
                 poly = _outline(img, d.box)
                 if poly:
@@ -2030,6 +2114,16 @@ def detect(data: bytes, conf: float = DEFAULT_CONF) -> dict:
                     outlined += 1
             if outlined and "+SEGMENTED" not in detector:
                 detector += "+SEGMENTED"
+
+        # Open or closed, decided from the picture rather than from the
+        # detector. Done here, after outlining, because the judgement is made
+        # inside the traced boundary -- the box includes pavement, and pavement
+        # is bright, which is exactly what the measurement is comparing against.
+        for d in dets:
+            if d.label in MANHOLE_LABELS:
+                d.label = ("Open Manhole"
+                           if _manhole_is_open(img, d.box, d.polygon)
+                           else CLOSED_MANHOLE)
 
         # A whole-frame pass reliably finds the nearest, largest defect and
         # routinely misses the smaller ones further up the road — they occupy

@@ -547,7 +547,8 @@ MANHOLE_LOOSE_FRAME = 0.80
 MANHOLE_MAX_FRAME = 0.90
 # Open-versus-closed judgement -- see _manhole_is_open.
 MANHOLE_VOID_LEVEL = 60        # 0-255; below this is unlit, not shadowed
-MANHOLE_VOID_FRACTION = 0.12   # this much of the interior must be void
+MANHOLE_VOID_FRACTION = 0.20   # ...or this much of it is void overall
+MANHOLE_OPENING_FRACTION = 0.15  # one hole this big is a hole to fall into
 MANHOLE_VOID_RELATIVE = 0.50   # ...and it must be this dark vs the pavement
 MANHOLE_SURROUND_PX = 30       # width of the pavement reference ring
 # The multi-class model may point at a manhole, never label one.
@@ -873,7 +874,18 @@ def _manhole_is_open(img: np.ndarray, box: list[float],
             return True     # cannot tell; the hazard reading is the safe one
         void = float((inside < MANHOLE_VOID_LEVEL).mean())
         rel_dark = float(np.percentile(inside, 15)) / max(float(np.median(outside)), 1.0)
-        return void >= MANHOLE_VOID_FRACTION and rel_dark <= MANHOLE_VOID_RELATIVE
+        if rel_dark > MANHOLE_VOID_RELATIVE:
+            return False
+        # One large opening, or an interior that is mostly void. A cover broken
+        # right through still counts as closed: the holes in CMP-10488 come to
+        # 13% of its face, but the largest single one is 3.6% -- you cannot
+        # step into it, and the cover is plainly still sitting in the ring.
+        # What matters is whether there is a hole to fall into, not how much
+        # dark there is in total.
+        dark = ((grey < MANHOLE_VOID_LEVEL) & (inside_mask == 1)).astype(np.uint8)
+        count, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+        largest = (int(stats[1:, cv2.CC_STAT_AREA].max()) if count > 1 else 0) / inside.size
+        return largest >= MANHOLE_OPENING_FRACTION or void >= MANHOLE_VOID_FRACTION
     except Exception:
         return True
 

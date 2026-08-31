@@ -550,6 +550,12 @@ MANHOLE_VOID_LEVEL = 60        # 0-255; below this is unlit, not shadowed
 # One opening covering this much of the manhole's own footprint is a hole
 # you could step into. Below it, the cover is still doing its job.
 MANHOLE_OPENING_FRACTION = 0.055
+# A recess in shade, when no single opening shows. See _manhole_is_open.
+MANHOLE_RECESS_MIN_COVER = 0.30   # outline must be a fair share of the box
+MANHOLE_RECESS_DARK = 0.72        # interior this much darker than pavement
+MANHOLE_RECESS_DARK_LOOSE = 0.78  # ...or a little darker, with contents
+MANHOLE_RECESS_SPREAD = 1.00      # throwing this much contrast
+MANHOLE_GRATE_BLOBS = 12          # this many dark pieces means a grate
 MANHOLE_SURROUND_PX = 30       # width of the pavement reference ring
 # The multi-class model may point at a manhole, never label one.
 MULTICLASS_MANHOLE_LOCATOR = os.environ.get("LUMEN_MC_MANHOLE", "1") == "1"
@@ -874,10 +880,42 @@ def _manhole_is_open(img: np.ndarray, box: list[float],
         level = min(MANHOLE_VOID_LEVEL, float(np.median(outside)) * 0.45)
         dark = ((grey < level) & (inside_mask == 1)).astype(np.uint8)
         count, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
-        if count <= 1:
-            return False
-        largest = int(stats[1:, cv2.CC_STAT_AREA].max()) / box_area
-        return largest >= MANHOLE_OPENING_FRACTION
+        areas = stats[1:, cv2.CC_STAT_AREA] if count > 1 else np.array([0])
+        if float(areas.max()) / box_area >= MANHOLE_OPENING_FRACTION:
+            return True
+
+        # No single big opening. That is usually a cover doing its job, but it
+        # is also what an open chamber looks like once it has filled up with
+        # cables or rubble: the contents catch the light, so no part of it
+        # reads as a void. What still gives it away is that the whole recess
+        # sits in shade, a good deal darker than the pavement it is cut into,
+        # and its contents throw far more contrast than a flat plate does.
+        #
+        #                       interior/pavement   contrast
+        #     CMP-10293  open           0.59          0.86
+        #     CMP-10423  open           0.71          0.72
+        #     CMP-10440  open           0.74          1.07
+        #     CMP-10296  cover          0.73          0.51
+        #     CMP-10488  cover          0.83          0.85
+        #
+        # Two guards. The outline must cover a fair share of the box, because
+        # where the tracer has followed a small break instead of the cover the
+        # interior is that break and is black by definition (CMP-10254). And a
+        # trace broken into many small dark pieces is a grate, whose slots are
+        # meant to be there -- CMP-10480 has sixteen of them, against one to
+        # seven for a chamber.
+        interior = grey[inside_mask == 1].astype(np.float32)
+        pavement = max(float(np.median(outside)), 1.0)
+        if (inside_mask.sum() / box_area >= MANHOLE_RECESS_MIN_COVER
+                and sum(1 for a in areas if a > box_area * 0.004) < MANHOLE_GRATE_BLOBS
+                and interior.size > 100):
+            ratio = float(np.median(interior)) / pavement
+            spread = float(np.percentile(interior, 90)
+                           - np.percentile(interior, 10)) / pavement
+            if ratio < MANHOLE_RECESS_DARK or (ratio < MANHOLE_RECESS_DARK_LOOSE
+                                               and spread > MANHOLE_RECESS_SPREAD):
+                return True
+        return False
     except Exception:
         return True
 

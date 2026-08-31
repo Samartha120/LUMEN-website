@@ -1,16 +1,18 @@
 import { useState } from "react";
 import {
-  ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView,
+  KeyboardAvoidingView, Platform, Pressable, ScrollView,
   StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { login, register, API_URL } from "../api";
-import { T } from "../theme";
+import { C, S, R, F, E } from "../theme";
+import { Button } from "../ui";
 
 export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => void }) {
   const [mode, setMode] = useState<"in" | "up">("in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [focus, setFocus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,7 +30,7 @@ export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => vo
       onSignedIn(user);
     } catch (e: any) {
       // A network failure here is nearly always the API address, not the
-      // credentials, so say so rather than showing "request failed".
+      // credentials, so say which rather than showing "request failed".
       setError(
         e?.message === "Network request failed"
           ? `Cannot reach the server at ${API_URL}. Check EXPO_PUBLIC_API_URL and that the phone is on the same network.`
@@ -39,73 +41,97 @@ export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => vo
     }
   }
 
+  const field = (key: string) => [s.input, focus === key && s.inputFocus];
+
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-      <ScrollView contentContainerStyle={s.wrap} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView style={s.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
         <View style={s.brand}>
+          <View style={s.mark}><Text style={s.markText}>L</Text></View>
           <Text style={s.logo}>LUMEN</Text>
-          <Text style={s.tag}>Report civic damage</Text>
+          <Text style={s.tag}>Report civic damage in your city</Text>
         </View>
 
         <View style={s.card}>
-          <Text style={s.h1}>{signUp ? "Create an account" : "Sign in"}</Text>
+          <Text style={s.h1}>{signUp ? "Create an account" : "Welcome back"}</Text>
+          <Text style={s.h2}>
+            {signUp ? "Takes a moment. You only need an email." : "Sign in to file and follow your reports."}
+          </Text>
 
           {signUp && (
             <>
               <Text style={s.label}>Name</Text>
-              <TextInput style={s.input} value={name} onChangeText={setName}
-                placeholder="Your name" autoCapitalize="words" placeholderTextColor={T.muted} />
+              <TextInput style={field("name")} value={name} onChangeText={setName}
+                onFocus={() => setFocus("name")} onBlur={() => setFocus(null)}
+                placeholder="Your name" autoCapitalize="words" placeholderTextColor={C.muted} />
             </>
           )}
 
           <Text style={s.label}>Email</Text>
-          <TextInput style={s.input} value={email} onChangeText={setEmail}
+          <TextInput style={field("email")} value={email} onChangeText={setEmail}
+            onFocus={() => setFocus("email")} onBlur={() => setFocus(null)}
             placeholder="you@example.com" autoCapitalize="none" keyboardType="email-address"
-            autoCorrect={false} placeholderTextColor={T.muted} />
+            autoCorrect={false} placeholderTextColor={C.muted} />
 
           <Text style={s.label}>Password</Text>
-          <TextInput style={s.input} value={password} onChangeText={setPassword}
-            placeholder="••••••••" secureTextEntry placeholderTextColor={T.muted} />
+          <TextInput style={field("password")} value={password} onChangeText={setPassword}
+            onFocus={() => setFocus("password")} onBlur={() => setFocus(null)}
+            placeholder="••••••••" secureTextEntry placeholderTextColor={C.muted} />
 
-          {error && <Text style={s.error}>{error}</Text>}
+          {error && (
+            <View style={s.errorBox}>
+              <Text style={s.errorText}>{error}</Text>
+            </View>
+          )}
 
-          <Pressable style={[s.btn, busy && s.btnBusy]} onPress={go} disabled={busy}>
-            {busy ? <ActivityIndicator color="#fff" />
-                  : <Text style={s.btnText}>{signUp ? "Create account" : "Sign in"}</Text>}
-          </Pressable>
+          <Button label={signUp ? "Create account" : "Sign in"} onPress={go} busy={busy}
+            style={{ marginTop: S.xl }} />
 
-          <Pressable onPress={() => { setMode(signUp ? "in" : "up"); setError(null); }}>
+          <Pressable onPress={() => { setMode(signUp ? "in" : "up"); setError(null); }} hitSlop={8}>
             <Text style={s.switch}>
-              {signUp ? "Already registered? Sign in" : "New here? Create an account"}
+              {signUp ? "Already registered?  " : "New here?  "}
+              <Text style={s.switchStrong}>{signUp ? "Sign in" : "Create an account"}</Text>
             </Text>
           </Pressable>
         </View>
 
-        <Text style={s.foot}>Connected to {API_URL}</Text>
+        <Text style={s.foot}>{API_URL.replace(/^https?:\/\//, "")}</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const s = StyleSheet.create({
-  wrap: { flexGrow: 1, backgroundColor: T.navy, padding: 24, justifyContent: "center" },
-  brand: { alignItems: "center", marginBottom: 28 },
-  logo: { color: "#fff", fontSize: 34, fontWeight: "800", letterSpacing: 4 },
-  tag: { color: "#c7d2fe", marginTop: 6, fontSize: 15 },
-  card: { backgroundColor: T.card, borderRadius: 16, padding: 20 },
-  h1: { fontSize: 20, fontWeight: "700", color: T.ink, marginBottom: 16 },
-  label: { fontSize: 13, color: T.body, marginBottom: 6, marginTop: 10, fontWeight: "600" },
+  root: { flex: 1, backgroundColor: C.brand },
+  scroll: { flexGrow: 1, padding: S.xl, justifyContent: "center" },
+  brand: { alignItems: "center", marginBottom: S.xxl },
+  mark: {
+    width: 60, height: 60, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.14)",
+    alignItems: "center", justifyContent: "center", marginBottom: S.md,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
+  },
+  markText: { color: "#fff", fontSize: 28, fontWeight: "800" },
+  logo: { color: "#fff", fontSize: 26, fontWeight: "800", letterSpacing: 6 },
+  tag: { color: "#c3ccff", marginTop: S.sm, fontSize: 14, letterSpacing: 0.2 },
+
+  card: { backgroundColor: C.surface, borderRadius: R.xl, padding: S.xl, ...E.raised },
+  h1: { ...F.title },
+  h2: { ...F.caption, marginTop: S.xs, marginBottom: S.lg },
+
+  label: { ...F.caption, color: C.body, fontWeight: "700", marginTop: S.lg, marginBottom: 6 },
   input: {
-    borderWidth: 1, borderColor: T.line, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 11, fontSize: 16, color: T.ink,
+    borderWidth: 1.5, borderColor: C.line, borderRadius: R.md, backgroundColor: C.bg,
+    paddingHorizontal: S.md, paddingVertical: 13, fontSize: 16, color: C.ink,
   },
-  btn: {
-    backgroundColor: T.navy, borderRadius: 10, paddingVertical: 14,
-    alignItems: "center", marginTop: 20,
+  inputFocus: { borderColor: C.accent, backgroundColor: C.surface },
+
+  errorBox: {
+    backgroundColor: C.badSoft, borderRadius: R.md, padding: S.md, marginTop: S.lg,
+    borderWidth: 1, borderColor: "#f6cfcc",
   },
-  btnBusy: { opacity: 0.7 },
-  btnText: { color: "#fff", fontWeight: "700", fontSize: 16 },
-  switch: { color: T.accent, textAlign: "center", marginTop: 16, fontSize: 14 },
-  error: { color: T.bad, marginTop: 12, fontSize: 13, lineHeight: 18 },
-  foot: { color: "#a5b4fc", textAlign: "center", marginTop: 18, fontSize: 11 },
+  errorText: { color: C.bad, fontSize: 13, lineHeight: 19 },
+
+  switch: { ...F.caption, textAlign: "center", marginTop: S.lg },
+  switchStrong: { color: C.accent, fontWeight: "700" },
+  foot: { color: "rgba(255,255,255,0.5)", textAlign: "center", marginTop: S.xl, fontSize: 11 },
 });

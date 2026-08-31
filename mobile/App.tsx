@@ -11,9 +11,16 @@ import ReportScreen from "./src/screens/ReportScreen";
 import MyReportsScreen from "./src/screens/MyReportsScreen";
 import AlertsScreen from "./src/screens/AlertsScreen";
 import DetailScreen from "./src/screens/DetailScreen";
-import { T } from "./src/theme";
+import { C, S, R } from "./src/theme";
 
 type Tab = "report" | "reports" | "alerts";
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
 
 /**
  * Navigation is a piece of state rather than a router.
@@ -82,8 +89,18 @@ export default function App() {
     <SafeAreaView style={s.safe}>
       <StatusBar style="light" />
       <View style={s.bar}>
-        <Text style={s.barTitle}>LUMEN</Text>
-        <Pressable onPress={signOut} hitSlop={10}>
+        <View style={s.barLeft}>
+          <View style={s.avatar}>
+            <Text style={s.avatarText}>
+              {String(user?.name ?? "?").trim().charAt(0).toUpperCase()}
+            </Text>
+          </View>
+          <View>
+            <Text style={s.hello}>{greeting()}</Text>
+            <Text style={s.who} numberOfLines={1}>{user?.name ?? "Citizen"}</Text>
+          </View>
+        </View>
+        <Pressable onPress={signOut} hitSlop={10} style={s.signOutBtn}>
           <Text style={s.signOut}>Sign out</Text>
         </Pressable>
       </View>
@@ -131,30 +148,43 @@ export default function App() {
 
 const s = StyleSheet.create({
   safe: {
-    flex: 1, backgroundColor: T.bg,
+    flex: 1, backgroundColor: C.brand,
     paddingTop: Platform.OS === "android" ? RNStatusBar.currentHeight : 0,
   },
-  boot: { flex: 1, backgroundColor: T.navy, alignItems: "center", justifyContent: "center" },
-  bootLogo: { color: "#fff", fontSize: 30, fontWeight: "800", letterSpacing: 4, marginBottom: 18 },
+  boot: { flex: 1, backgroundColor: C.brand, alignItems: "center", justifyContent: "center" },
+  bootLogo: { color: "#fff", fontSize: 28, fontWeight: "800", letterSpacing: 6, marginBottom: S.lg },
   bar: {
-    backgroundColor: T.navy, paddingHorizontal: 20, paddingVertical: 14,
+    backgroundColor: C.brand, paddingHorizontal: S.xl, paddingVertical: S.md,
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
   },
-  barTitle: { color: "#fff", fontWeight: "800", letterSpacing: 3, fontSize: 16 },
-  signOut: { color: "#c7d2fe", fontSize: 13, fontWeight: "600" },
-  body: { flex: 1 },
-  tabs: {
-    flexDirection: "row", backgroundColor: T.card,
-    borderTopWidth: 1, borderTopColor: T.line, paddingBottom: 6,
+  barLeft: { flexDirection: "row", alignItems: "center", gap: S.md, flex: 1 },
+  avatar: {
+    width: 38, height: 38, borderRadius: 19, backgroundColor: "rgba(255,255,255,0.16)",
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.22)",
   },
-  tab: { flex: 1, alignItems: "center", paddingVertical: 10 },
-  tabIcon: { fontSize: 20, color: T.muted },
-  tabText: { fontSize: 12, color: T.muted, marginTop: 2, fontWeight: "600" },
-  tabOn: { color: T.navy },
+  avatarText: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  hello: { color: "#b9c3ff", fontSize: 11, fontWeight: "600", letterSpacing: 0.3 },
+  who: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  signOutBtn: {
+    paddingHorizontal: S.md, paddingVertical: 6, borderRadius: R.pill,
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  signOut: { color: "#dfe4ff", fontSize: 12, fontWeight: "700" },
+  body: { flex: 1, backgroundColor: C.bg },
+  tabs: {
+    flexDirection: "row", backgroundColor: C.surface,
+    borderTopWidth: 1, borderTopColor: C.line, paddingBottom: S.sm, paddingTop: 6,
+  },
+  tab: { flex: 1, alignItems: "center", paddingVertical: 8 },
+  tabIcon: { fontSize: 19, color: C.muted },
+  tabText: { fontSize: 11, color: C.muted, marginTop: 3, fontWeight: "700" },
+  tabOn: { color: C.brand },
   badge: {
-    position: "absolute", top: -4, right: -10, backgroundColor: T.bad,
-    minWidth: 17, height: 17, borderRadius: 9, alignItems: "center",
+    position: "absolute", top: -5, right: -11, backgroundColor: C.bad,
+    minWidth: 18, height: 18, borderRadius: 9, alignItems: "center",
     justifyContent: "center", paddingHorizontal: 4,
+    borderWidth: 2, borderColor: C.surface,
   },
   badgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
 });

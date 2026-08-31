@@ -7,7 +7,8 @@ import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { submitReport, previewPhoto, Preview } from "../api";
 import { enqueue, isOnline } from "../outbox";
-import { T, priorityColour } from "../theme";
+import { C, S, R, F, card, tone } from "../theme";
+import { Button, Meter } from "../ui";
 
 const MAX_PHOTOS = 5;
 
@@ -20,6 +21,7 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
   const [checking, setChecking] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [focused, setFocused] = useState(false);
 
   function addPhoto(uri: string) {
     setPhotos((p) => [...p, uri].slice(0, MAX_PHOTOS));
@@ -118,24 +120,32 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
     setPhotos([]); setTitle(""); setCoords(null); setPreview(null);
   }
 
+  const step = photos.length === 0 ? 1 : !title.trim() ? 2 : 3;
+
   return (
     <ScrollView contentContainerStyle={s.wrap} keyboardShouldPersistTaps="handled">
       <Text style={s.h1}>Report a problem</Text>
-      <Text style={s.sub}>
-        Photograph the damage. The class, severity and department are worked out
-        from the picture.
-      </Text>
+      <Text style={s.sub}>The class, severity and department come from your photograph.</Text>
+
+      <View style={s.steps}>
+        {[1, 2, 3].map((n) => (
+          <View key={n} style={[s.stepBar, n <= step && s.stepBarOn]} />
+        ))}
+      </View>
+
+      <Text style={s.legend}>Step {step} of 3 · {["Photograph", "Describe", "Submit"][step - 1]}</Text>
 
       {photos.length > 0 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.strip}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.strip}
+          contentContainerStyle={{ paddingRight: S.lg, paddingTop: 6 }}>
           {photos.map((uri, i) => (
             <View key={uri + i} style={s.thumbWrap}>
               <Image source={{ uri }} style={s.thumb} />
-              <Pressable style={s.thumbX}
+              <Pressable style={s.thumbX} hitSlop={8}
                 onPress={() => { setPhotos((p) => p.filter((_, j) => j !== i)); setPreview(null); }}>
                 <Text style={s.thumbXText}>✕</Text>
               </Pressable>
-              {i === 0 && <Text style={s.primaryTag}>main</Text>}
+              {i === 0 && <View style={s.mainTag}><Text style={s.mainTagText}>MAIN</Text></View>}
             </View>
           ))}
         </ScrollView>
@@ -143,152 +153,191 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
 
       {photos.length < MAX_PHOTOS && (
         <View style={s.pickRow}>
-          <Pressable style={[s.pick, s.pickPrimary]} onPress={takePhoto}>
+          <Pressable style={({ pressed }) => [s.pick, s.pickPrimary, pressed && s.pickPressed]}
+            onPress={takePhoto}>
             <Text style={s.pickIcon}>📷</Text>
             <Text style={s.pickTextPrimary}>{photos.length ? "Add photo" : "Take photo"}</Text>
           </Pressable>
-          <Pressable style={s.pick} onPress={pickPhoto}>
+          <Pressable style={({ pressed }) => [s.pick, pressed && s.pickPressed]} onPress={pickPhoto}>
             <Text style={s.pickIcon}>🖼️</Text>
             <Text style={s.pickText}>From gallery</Text>
           </Pressable>
         </View>
       )}
+      {photos.length > 0 && (
+        <Text style={s.counter}>{photos.length} of {MAX_PHOTOS} · the first is used for classification</Text>
+      )}
 
       {photos.length > 0 && (
-        <Pressable style={s.checkBtn} onPress={check} disabled={checking}>
+        <Pressable style={({ pressed }) => [s.checkBtn, pressed && s.checkPressed]}
+          onPress={check} disabled={checking}>
           {checking
-            ? <ActivityIndicator color={T.navy} />
-            : <Text style={s.checkText}>🔍  Check what the AI sees</Text>}
+            ? <ActivityIndicator color={C.brand} />
+            : <Text style={s.checkText}>Check what the AI sees</Text>}
         </Pressable>
       )}
 
-      {preview && (
-        <View style={s.preview}>
-          <Image source={{ uri: preview.annotated }} style={s.previewImg} resizeMode="cover" />
-          {!preview.looksCivic ? (
-            <>
-              <Text style={s.previewBad}>This does not look like a road or civic area</Text>
-              <Text style={s.previewBody}>{preview.hint ?? preview.message}</Text>
-            </>
-          ) : preview.detections.length === 0 ? (
-            <>
-              <Text style={s.previewWarn}>Nothing detected in this photograph</Text>
-              <Text style={s.previewBody}>
-                Move closer, or make sure the damage fills more of the frame. You can
-                still file it — a supervisor will triage it by hand.
-              </Text>
-            </>
-          ) : (
-            <>
-              <Text style={s.previewOk}>
-                {preview.detections.length} region{preview.detections.length === 1 ? "" : "s"} detected
-              </Text>
-              {preview.detections.slice(0, 4).map((d, i) => (
-                <View key={i} style={s.detRow}>
-                  <Text style={s.detLabel}>{d.label}</Text>
-                  <Text style={s.detConf}>{Math.round(d.confidence * 100)}%</Text>
-                </View>
-              ))}
-              <Text style={[s.previewBody, { marginTop: 8 }]}>
-                Severity {Math.round(preview.severity.score)}/100 ·{" "}
-                <Text style={{ color: priorityColour(preview.severity.priority), fontWeight: "700" }}>
-                  {preview.severity.priority}
-                </Text>
-              </Text>
-            </>
-          )}
-          <Text style={s.previewNote}>Nothing has been filed yet.</Text>
-        </View>
-      )}
+      {preview && <PreviewCard preview={preview} />}
 
       <Text style={s.label}>What is the problem?</Text>
-      <TextInput style={s.input} value={title} onChangeText={setTitle}
+      <TextInput
+        style={[s.input, focused && s.inputFocus]}
+        value={title} onChangeText={setTitle}
+        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
         placeholder="e.g. Deep pothole outside the school gate"
-        placeholderTextColor={T.muted} multiline />
+        placeholderTextColor={C.muted} multiline
+      />
 
-      <View style={s.locRow}>
-        <Text style={s.locText}>
-          {coords
-            ? `📍 Location attached (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`
-            : "📍 No location attached"}
-        </Text>
-        <Pressable onPress={locate} disabled={locating}>
-          <Text style={s.locBtn}>{locating ? "Locating…" : coords ? "Update" : "Use my location"}</Text>
-        </Pressable>
-      </View>
-
-      {error && <Text style={s.error}>{error}</Text>}
-
-      <Pressable style={[s.btn, busy && s.btnBusy]} onPress={send} disabled={busy}>
-        {busy ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Submit report</Text>}
+      <Pressable style={s.locRow} onPress={locate} disabled={locating}>
+        <View style={{ flex: 1 }}>
+          <Text style={s.locTitle}>{coords ? "Location attached" : "Add your location"}</Text>
+          <Text style={s.locSub}>
+            {coords
+              ? `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`
+              : "Helps route the report to the right ward"}
+          </Text>
+        </View>
+        <Text style={s.locAction}>{locating ? "…" : coords ? "Update" : "Use GPS"}</Text>
       </Pressable>
+
+      {error && <View style={s.errorBox}><Text style={s.errorText}>{error}</Text></View>}
+
+      <Button label="Submit report" onPress={send} busy={busy} style={{ marginTop: S.xl }} />
       {busy && <Text style={s.hint}>Analysing the photograph…</Text>}
     </ScrollView>
   );
 }
 
+function PreviewCard({ preview }: { preview: Preview }) {
+  const t = tone(preview.severity.priority);
+  const none = preview.detections.length === 0;
+  return (
+    <View style={[card, s.preview]}>
+      <Image source={{ uri: preview.annotated }} style={s.previewImg} resizeMode="cover" />
+      <View style={s.previewBody}>
+        {!preview.looksCivic ? (
+          <>
+            <Text style={[s.previewVerdict, { color: C.bad }]}>Not a road or civic area</Text>
+            <Text style={s.previewText}>{preview.hint ?? preview.message}</Text>
+          </>
+        ) : none ? (
+          <>
+            <Text style={[s.previewVerdict, { color: C.warn }]}>Nothing detected</Text>
+            <Text style={s.previewText}>
+              Move closer, or let the damage fill more of the frame. You can still file
+              it — a supervisor will triage it by hand.
+            </Text>
+          </>
+        ) : (
+          <>
+            <View style={s.previewHead}>
+              <Text style={[s.previewVerdict, { color: C.ok }]}>
+                {preview.detections.length} region{preview.detections.length === 1 ? "" : "s"} found
+              </Text>
+              <View style={[s.sevChip, { backgroundColor: t.bg }]}>
+                <Text style={[s.sevChipText, { color: t.fg }]}>{preview.severity.priority}</Text>
+              </View>
+            </View>
+            {preview.detections.slice(0, 4).map((d, i) => (
+              <View key={i} style={s.detRow}>
+                <Text style={s.detLabel}>{d.label}</Text>
+                <Text style={s.detConf}>{Math.round(d.confidence * 100)}%</Text>
+              </View>
+            ))}
+            <View style={{ marginTop: S.md }}>
+              <Meter value={preview.severity.score} priority={preview.severity.priority} />
+              <Text style={s.sevText}>Severity {Math.round(preview.severity.score)} / 100</Text>
+            </View>
+          </>
+        )}
+        <Text style={s.previewNote}>Nothing has been filed yet.</Text>
+      </View>
+    </View>
+  );
+}
+
 const s = StyleSheet.create({
-  wrap: { padding: 20, paddingBottom: 48, backgroundColor: T.bg, flexGrow: 1 },
-  h1: { fontSize: 24, fontWeight: "800", color: T.ink },
-  sub: { color: T.muted, marginTop: 6, marginBottom: 20, lineHeight: 20 },
-  strip: { marginBottom: 14 },
-  thumbWrap: { marginRight: 10 },
-  thumb: { width: 96, height: 96, borderRadius: 12, backgroundColor: "#ddd" },
+  wrap: { padding: S.xl, paddingBottom: S.xxxl, backgroundColor: C.bg, flexGrow: 1 },
+  h1: { ...F.display },
+  sub: { ...F.body, color: C.muted, marginTop: S.xs },
+
+  steps: { flexDirection: "row", gap: 6, marginTop: S.xl },
+  stepBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: C.line },
+  stepBarOn: { backgroundColor: C.brand },
+  legend: { ...F.caption, marginTop: S.sm, marginBottom: S.lg },
+
+  strip: { marginBottom: S.md },
+  thumbWrap: { marginRight: S.md },
+  thumb: { width: 104, height: 104, borderRadius: R.md, backgroundColor: C.raised },
   thumbX: {
-    position: "absolute", top: -6, right: -6, backgroundColor: T.ink,
+    position: "absolute", top: -6, right: -6, backgroundColor: C.ink,
     width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center",
+    borderWidth: 2, borderColor: C.bg,
   },
-  thumbXText: { color: "#fff", fontSize: 12, fontWeight: "800" },
-  primaryTag: {
-    position: "absolute", bottom: 6, left: 6, backgroundColor: "rgba(0,0,0,0.6)",
-    color: "#fff", fontSize: 10, fontWeight: "700", paddingHorizontal: 6,
-    paddingVertical: 2, borderRadius: 4, overflow: "hidden",
+  thumbXText: { color: "#fff", fontSize: 11, fontWeight: "800" },
+  mainTag: {
+    position: "absolute", bottom: 7, left: 7, backgroundColor: "rgba(10,14,25,0.72)",
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: R.sm,
   },
-  pickRow: { flexDirection: "row", gap: 12 },
+  mainTagText: { color: "#fff", fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
+
+  pickRow: { flexDirection: "row", gap: S.md },
   pick: {
-    flex: 1, backgroundColor: T.card, borderRadius: 14, paddingVertical: 22,
-    alignItems: "center", borderWidth: 1, borderColor: T.line,
+    flex: 1, backgroundColor: C.surface, borderRadius: R.lg, paddingVertical: S.xl,
+    alignItems: "center", borderWidth: 1.5, borderColor: C.line,
   },
-  pickPrimary: { backgroundColor: T.navy, borderColor: T.navy },
+  pickPrimary: { backgroundColor: C.brand, borderColor: C.brand },
+  pickPressed: { opacity: 0.92 },
   pickIcon: { fontSize: 24, marginBottom: 6 },
-  pickText: { color: T.body, fontWeight: "600" },
-  pickTextPrimary: { color: "#fff", fontWeight: "700" },
+  pickText: { ...F.bodyStrong, color: C.body },
+  pickTextPrimary: { ...F.bodyStrong, color: C.onBrand },
+  counter: { ...F.caption, marginTop: S.md, textAlign: "center" },
+
   checkBtn: {
-    marginTop: 14, borderWidth: 1.5, borderColor: T.navy, borderRadius: 12,
-    paddingVertical: 13, alignItems: "center", backgroundColor: "#eef2ff",
+    marginTop: S.lg, borderWidth: 1.5, borderColor: "#d6ddff", borderRadius: R.md,
+    paddingVertical: 14, alignItems: "center", backgroundColor: C.brandSoft, minHeight: 50,
+    justifyContent: "center",
   },
-  checkText: { color: T.navy, fontWeight: "800" },
-  preview: {
-    marginTop: 14, backgroundColor: T.card, borderRadius: 14, padding: 14,
-    borderWidth: 1, borderColor: T.line,
-  },
-  previewImg: { width: "100%", height: 200, borderRadius: 10, backgroundColor: "#eee", marginBottom: 12 },
-  previewOk: { color: T.ok, fontWeight: "800", marginBottom: 8 },
-  previewWarn: { color: T.warn, fontWeight: "800", marginBottom: 6 },
-  previewBad: { color: T.bad, fontWeight: "800", marginBottom: 6 },
-  previewBody: { color: T.body, lineHeight: 19 },
-  previewNote: { color: T.muted, fontSize: 12, marginTop: 10, fontStyle: "italic" },
+  checkPressed: { backgroundColor: "#e3e9ff" },
+  checkText: { color: C.brand, fontWeight: "800", fontSize: 15 },
+
+  preview: { marginTop: S.lg, padding: 0, overflow: "hidden" },
+  previewImg: { width: "100%", height: 210, backgroundColor: C.raised },
+  previewBody: { padding: S.lg },
+  previewHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  previewVerdict: { fontSize: 15, fontWeight: "800" },
+  sevChip: { paddingHorizontal: S.md, paddingVertical: 4, borderRadius: R.pill },
+  sevChipText: { fontSize: 11, fontWeight: "800", letterSpacing: 0.3 },
+  previewText: { ...F.body, marginTop: 6 },
   detRow: {
-    flexDirection: "row", justifyContent: "space-between",
-    paddingVertical: 7, borderTopWidth: 1, borderTopColor: T.line,
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingVertical: 9, borderTopWidth: 1, borderTopColor: C.line, marginTop: S.sm,
   },
-  detLabel: { color: T.ink, fontWeight: "600" },
-  detConf: { color: T.accent, fontWeight: "800" },
-  label: { fontSize: 13, color: T.body, fontWeight: "700", marginTop: 22, marginBottom: 8 },
+  detLabel: { ...F.bodyStrong },
+  detConf: { ...F.bodyStrong, color: C.accent },
+  sevText: { ...F.caption, marginTop: 6 },
+  previewNote: { ...F.caption, fontSize: 12, marginTop: S.md, fontStyle: "italic" },
+
+  label: { ...F.caption, color: C.body, fontWeight: "700", marginTop: S.xxl, marginBottom: S.sm },
   input: {
-    backgroundColor: T.card, borderWidth: 1, borderColor: T.line, borderRadius: 10,
-    padding: 12, fontSize: 16, minHeight: 70, textAlignVertical: "top", color: T.ink,
+    backgroundColor: C.surface, borderWidth: 1.5, borderColor: C.line, borderRadius: R.md,
+    padding: S.md, fontSize: 16, minHeight: 78, textAlignVertical: "top", color: C.ink,
   },
+  inputFocus: { borderColor: C.accent },
+
   locRow: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    marginTop: 18, backgroundColor: T.card, borderRadius: 10, padding: 12,
-    borderWidth: 1, borderColor: T.line,
+    flexDirection: "row", alignItems: "center", marginTop: S.lg,
+    backgroundColor: C.surface, borderRadius: R.md, padding: S.lg,
+    borderWidth: 1, borderColor: C.line,
   },
-  locText: { color: T.body, fontSize: 13, flex: 1 },
-  locBtn: { color: T.accent, fontWeight: "700", fontSize: 13 },
-  error: { color: T.bad, marginTop: 14, lineHeight: 19 },
-  btn: { backgroundColor: T.navy, borderRadius: 12, paddingVertical: 16, alignItems: "center", marginTop: 24 },
-  btnBusy: { opacity: 0.7 },
-  btnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
-  hint: { color: T.muted, textAlign: "center", marginTop: 10, fontSize: 13 },
+  locTitle: { ...F.bodyStrong },
+  locSub: { ...F.caption, marginTop: 2 },
+  locAction: { color: C.accent, fontWeight: "800", fontSize: 13 },
+
+  errorBox: {
+    backgroundColor: C.badSoft, borderRadius: R.md, padding: S.md, marginTop: S.lg,
+    borderWidth: 1, borderColor: "#f6cfcc",
+  },
+  errorText: { color: C.bad, fontSize: 13, lineHeight: 19 },
+  hint: { ...F.caption, textAlign: "center", marginTop: S.md },
 });

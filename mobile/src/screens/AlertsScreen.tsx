@@ -3,7 +3,8 @@ import {
   ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View,
 } from "react-native";
 import { notifications, markNotificationsRead, Notification } from "../api";
-import { T, statusLabel } from "../theme";
+import { C, S, R, F, card, statusLabel, ago } from "../theme";
+import { Empty } from "../ui";
 
 export default function AlertsScreen({ onOpen, onRead }: {
   onOpen: (ref: string) => void;
@@ -27,7 +28,7 @@ export default function AlertsScreen({ onOpen, onRead }: {
   useEffect(() => { load(); }, [load]);
 
   if (items === null) {
-    return <View style={s.centre}><ActivityIndicator size="large" color={T.navy} /></View>;
+    return <View style={s.centre}><ActivityIndicator size="large" color={C.brand} /></View>;
   }
 
   const unread = items.filter((n) => !n.readAt).length;
@@ -55,13 +56,11 @@ export default function AlertsScreen({ onOpen, onRead }: {
         ) : null
       }
       ListEmptyComponent={
-        <View style={s.centre}>
-          <Text style={s.emptyIcon}>🔔</Text>
-          <Text style={s.emptyTitle}>{error ? "Could not load" : "No updates yet"}</Text>
-          <Text style={s.emptyText}>
-            {error ?? "When a department picks up or resolves one of your reports, it appears here."}
-          </Text>
-        </View>
+        <Empty
+          icon={error ? "⚠️" : "🔔"}
+          title={error ? "Could not load" : "No updates yet"}
+          body={error ?? "When a department picks up or resolves one of your reports, it appears here."}
+        />
       }
       renderItem={({ item }) => (
         <Pressable
@@ -76,11 +75,14 @@ export default function AlertsScreen({ onOpen, onRead }: {
             {!item.readAt && <View style={s.dot} />}
           </View>
           {item.body && <Text style={s.body}>{item.body}</Text>}
-          {item.complaint && (
-            <Text style={s.meta}>
-              {item.complaint.ref} · {statusLabel(item.complaint.status)}
-            </Text>
-          )}
+          <View style={s.metaRow}>
+            {item.complaint && (
+              <Text style={s.meta}>
+                {item.complaint.ref} · {statusLabel(item.complaint.status)}
+              </Text>
+            )}
+            <Text style={s.meta}>{ago(item.createdAt)}</Text>
+          </View>
         </Pressable>
       )}
     />
@@ -88,23 +90,21 @@ export default function AlertsScreen({ onOpen, onRead }: {
 }
 
 const s = StyleSheet.create({
-  list: { padding: 20, paddingBottom: 40, backgroundColor: T.bg },
-  listEmpty: { flexGrow: 1, backgroundColor: T.bg },
-  centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
-  head: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
-  h1: { fontSize: 24, fontWeight: "800", color: T.ink },
-  readAll: { color: T.accent, fontWeight: "700", fontSize: 13 },
-  card: {
-    backgroundColor: T.card, borderRadius: 14, padding: 16, marginBottom: 10,
-    borderWidth: 1, borderColor: T.line,
+  list: { padding: S.xl, paddingBottom: S.xxxl, backgroundColor: C.bg },
+  listEmpty: { flexGrow: 1, backgroundColor: C.bg, padding: S.xl },
+  centre: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: C.bg },
+  head: {
+    flexDirection: "row", justifyContent: "space-between",
+    alignItems: "center", marginBottom: S.lg,
   },
-  cardUnread: { borderColor: "#c7d2fe", backgroundColor: "#f5f7ff" },
+  h1: { ...F.display },
+  readAll: { color: C.accent, fontWeight: "700", fontSize: 13 },
+  card: { ...card, marginBottom: S.md },
+  cardUnread: { borderColor: "#cfd8ff", backgroundColor: "#f7f9ff" },
   rowTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
-  title: { fontSize: 15, fontWeight: "700", color: T.ink, flex: 1, paddingRight: 10 },
-  dot: { width: 9, height: 9, borderRadius: 5, backgroundColor: T.accent, marginTop: 5 },
-  body: { color: T.body, marginTop: 6, lineHeight: 19 },
-  meta: { color: T.muted, fontSize: 12, marginTop: 8, fontWeight: "600" },
-  emptyIcon: { fontSize: 40, marginBottom: 12 },
-  emptyTitle: { fontSize: 18, fontWeight: "700", color: T.ink },
-  emptyText: { color: T.muted, textAlign: "center", marginTop: 8, lineHeight: 20 },
+  title: { ...F.bodyStrong, flex: 1, paddingRight: S.md },
+  dot: { width: 9, height: 9, borderRadius: 5, backgroundColor: C.accent, marginTop: 6 },
+  body: { ...F.body, marginTop: 6 },
+  metaRow: { flexDirection: "row", justifyContent: "space-between", marginTop: S.md },
+  meta: { ...F.caption, fontSize: 12, fontWeight: "600" },
 });

@@ -5,13 +5,14 @@ import {
 } from "react-native";
 import { myComplaints, Complaint } from "../api";
 import { readOutbox, flushOutbox, Queued } from "../outbox";
-import { T, priorityColour, statusLabel } from "../theme";
+import { C, S, R, F, card, tone, statusLabel, ago } from "../theme";
+import { Chip, Empty } from "../ui";
 
 const FILTERS = ["All", "Open", "Resolved"] as const;
 type Filter = (typeof FILTERS)[number];
 
 // What a citizen means by "resolved" is not one status, and they should not
-// have to know the workflow's vocabulary to filter their own reports.
+// have to learn the workflow's vocabulary to filter their own reports.
 const DONE = ["RESOLVED", "CLOSED", "REJECTED"];
 
 export default function MyReportsScreen({ onOpen, reloadKey }: {
@@ -38,12 +39,11 @@ export default function MyReportsScreen({ onOpen, reloadKey }: {
 
   useEffect(() => { load(); }, [load, reloadKey]);
 
-  // Anything queued while offline is pushed out on the next visit here, which
-  // is the natural moment: the user has just asked to see their reports.
+  // Anything queued while offline is pushed out on arriving here, which is the
+  // natural moment: the user has just asked to see their reports.
   useEffect(() => {
     (async () => {
-      const before = await readOutbox();
-      if (!before.length) return;
+      if (!(await readOutbox()).length) return;
       const { sent } = await flushOutbox();
       if (sent.length) load();
       else setQueued(await readOutbox());
@@ -67,7 +67,7 @@ export default function MyReportsScreen({ onOpen, reloadKey }: {
   }, [items, q, filter]);
 
   if (items === null) {
-    return <View style={s.centre}><ActivityIndicator size="large" color={T.navy} /></View>;
+    return <View style={s.centre}><ActivityIndicator size="large" color={C.brand} /></View>;
   }
 
   const resolved = items.filter((c) => DONE.includes((c.status ?? "").toUpperCase())).length;
@@ -78,7 +78,7 @@ export default function MyReportsScreen({ onOpen, reloadKey }: {
       keyExtractor={(c) => c.id}
       contentContainerStyle={shown.length ? s.list : s.listEmpty}
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={async () => {
+        <RefreshControl refreshing={refreshing} tintColor={C.brand} onRefresh={async () => {
           setRefreshing(true); await flushOutbox(); await load(); setRefreshing(false);
         }} />
       }
@@ -86,121 +86,125 @@ export default function MyReportsScreen({ onOpen, reloadKey }: {
         items.length ? (
           <View>
             <Text style={s.h1}>My reports</Text>
+
             <View style={s.stats}>
               <Stat n={items.length} label="filed" />
-              <Stat n={items.length - resolved} label="open" />
-              <Stat n={resolved} label="resolved" />
+              <Stat n={items.length - resolved} label="open" tint={C.warn} />
+              <Stat n={resolved} label="resolved" tint={C.ok} />
             </View>
 
             {queued.length > 0 && (
               <View style={s.queued}>
-                <Text style={s.queuedText}>
-                  ⏳ {queued.length} report{queued.length === 1 ? "" : "s"} waiting to send.
-                  They will go out automatically when you are back online.
+                <Text style={s.queuedTitle}>
+                  {queued.length} report{queued.length === 1 ? "" : "s"} waiting to send
+                </Text>
+                <Text style={s.queuedBody}>
+                  Saved on this phone. They go out automatically when you are back online.
                 </Text>
               </View>
             )}
 
             <TextInput style={s.search} value={q} onChangeText={setQ}
-              placeholder="Search your reports" placeholderTextColor={T.muted}
+              placeholder="Search your reports" placeholderTextColor={C.muted}
               autoCorrect={false} />
 
             <View style={s.filters}>
               {FILTERS.map((f) => (
-                <Pressable key={f} onPress={() => setFilter(f)}
-                  style={[s.chip, filter === f && s.chipOn]}>
-                  <Text style={[s.chipText, filter === f && s.chipTextOn]}>{f}</Text>
-                </Pressable>
+                <Chip key={f} label={f} selected={filter === f} onPress={() => setFilter(f)} />
               ))}
             </View>
           </View>
         ) : null
       }
       ListEmptyComponent={
-        <View style={s.centre}>
-          <Text style={s.emptyIcon}>🗒️</Text>
-          <Text style={s.emptyTitle}>
-            {error ? "Could not load" : items.length ? "Nothing matches" : "Nothing reported yet"}
-          </Text>
-          <Text style={s.emptyText}>
-            {error ??
-              (items.length
-                ? "Try a different search or filter."
-                : "Photograph a pothole, a garbage pile or an open manhole and it will appear here.")}
-          </Text>
-        </View>
+        <Empty
+          icon={error ? "⚠️" : items.length ? "🔍" : "📷"}
+          title={error ? "Could not load" : items.length ? "Nothing matches" : "No reports yet"}
+          body={
+            error ??
+            (items.length
+              ? "Try a different search, or clear the filter."
+              : "Photograph a pothole, a garbage pile or an open manhole and it will appear here.")
+          }
+        />
       }
-      renderItem={({ item }) => (
-        <Pressable style={s.card} onPress={() => onOpen(item.ref)}>
-          <View style={s.rowTop}>
-            <Text style={s.ref}>{item.ref}</Text>
-            <View style={[s.pill, { backgroundColor: priorityColour(item.priority) + "1a" }]}>
-              <Text style={[s.pillText, { color: priorityColour(item.priority) }]}>
-                {statusLabel(item.status)}
-              </Text>
+      renderItem={({ item }) => {
+        const t = tone(item.priority);
+        return (
+          <Pressable
+            onPress={() => onOpen(item.ref)}
+            style={({ pressed }) => [card, s.card, pressed && s.cardPressed]}
+          >
+            <View style={[s.accent, { backgroundColor: t.fg }]} />
+            <View style={s.cardBody}>
+              <View style={s.rowTop}>
+                <Text style={s.ref}>{item.ref}</Text>
+                <View style={[s.pill, { backgroundColor: t.bg }]}>
+                  <Text style={[s.pillText, { color: t.fg }]}>{statusLabel(item.status)}</Text>
+                </View>
+              </View>
+              <Text style={s.title} numberOfLines={2}>{item.title}</Text>
+              <View style={s.metaRow}>
+                <Text style={s.meta} numberOfLines={1}>
+                  {item.category ?? "Unclassified"}
+                  {item.department?.name ? ` · ${item.department.name}` : ""}
+                </Text>
+                <Text style={s.time}>{ago(item.createdAt)}</Text>
+              </View>
             </View>
-          </View>
-          <Text style={s.title} numberOfLines={2}>{item.title}</Text>
-          <Text style={s.meta}>
-            {item.category ?? "Unclassified"}
-            {item.department?.name ? ` · ${item.department.name}` : ""}
-            {item.severityScore != null ? ` · severity ${Math.round(item.severityScore)}/100` : ""}
-          </Text>
-        </Pressable>
-      )}
+          </Pressable>
+        );
+      }}
     />
   );
 }
 
-function Stat({ n, label }: { n: number; label: string }) {
+function Stat({ n, label, tint }: { n: number; label: string; tint?: string }) {
   return (
-    <View style={s.stat}>
-      <Text style={s.statN}>{n}</Text>
+    <View style={[card, s.stat]}>
+      <Text style={[s.statN, tint ? { color: tint } : null]}>{n}</Text>
       <Text style={s.statL}>{label}</Text>
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  list: { padding: 20, paddingBottom: 40, backgroundColor: T.bg },
-  listEmpty: { flexGrow: 1, backgroundColor: T.bg, padding: 20 },
-  centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
-  h1: { fontSize: 24, fontWeight: "800", color: T.ink, marginBottom: 14 },
-  stats: { flexDirection: "row", gap: 10, marginBottom: 14 },
-  stat: {
-    flex: 1, backgroundColor: T.card, borderRadius: 12, paddingVertical: 12,
-    alignItems: "center", borderWidth: 1, borderColor: T.line,
-  },
-  statN: { fontSize: 20, fontWeight: "800", color: T.navy },
-  statL: { fontSize: 11, color: T.muted, marginTop: 2, fontWeight: "600" },
+  list: { padding: S.xl, paddingBottom: S.xxxl, backgroundColor: C.bg },
+  listEmpty: { flexGrow: 1, backgroundColor: C.bg, padding: S.xl },
+  centre: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: C.bg },
+  h1: { ...F.display, marginBottom: S.lg },
+
+  stats: { flexDirection: "row", gap: S.md, marginBottom: S.lg },
+  stat: { flex: 1, alignItems: "center", paddingVertical: S.md, paddingHorizontal: 0 },
+  statN: { fontSize: 22, fontWeight: "800", color: C.brand, letterSpacing: -0.5 },
+  statL: { ...F.caption, fontSize: 11, marginTop: 2, textTransform: "uppercase", letterSpacing: 0.6 },
+
   queued: {
-    backgroundColor: "#fff7ed", borderWidth: 1, borderColor: "#fed7aa",
-    borderRadius: 10, padding: 12, marginBottom: 14,
+    backgroundColor: C.warnSoft, borderWidth: 1, borderColor: "#f3ddc0",
+    borderRadius: R.md, padding: S.lg, marginBottom: S.lg,
   },
-  queuedText: { color: "#9a3412", fontSize: 13, lineHeight: 19 },
+  queuedTitle: { color: C.warn, fontWeight: "800", fontSize: 14 },
+  queuedBody: { color: C.warn, fontSize: 13, lineHeight: 19, marginTop: 3, opacity: 0.9 },
+
   search: {
-    backgroundColor: T.card, borderWidth: 1, borderColor: T.line, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: T.ink,
+    backgroundColor: C.surface, borderWidth: 1.5, borderColor: C.line, borderRadius: R.md,
+    paddingHorizontal: S.md, paddingVertical: 11, fontSize: 15, color: C.ink,
   },
-  filters: { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 16 },
-  chip: {
-    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
-    backgroundColor: T.card, borderWidth: 1, borderColor: T.line,
-  },
-  chipOn: { backgroundColor: T.navy, borderColor: T.navy },
-  chipText: { color: T.body, fontWeight: "600", fontSize: 13 },
-  chipTextOn: { color: "#fff" },
-  card: {
-    backgroundColor: T.card, borderRadius: 14, padding: 16, marginBottom: 12,
-    borderWidth: 1, borderColor: T.line,
-  },
+  filters: { flexDirection: "row", gap: S.sm, marginTop: S.md, marginBottom: S.lg },
+
+  card: { marginBottom: S.md, padding: 0, flexDirection: "row", overflow: "hidden" },
+  cardPressed: { backgroundColor: C.raised },
+  accent: { width: 4 },
+  cardBody: { flex: 1, padding: S.lg },
   rowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  ref: { color: T.accent, fontWeight: "800", fontSize: 13, letterSpacing: 0.5 },
-  pill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
-  pillText: { fontSize: 11, fontWeight: "800" },
-  title: { fontSize: 16, fontWeight: "700", color: T.ink, marginTop: 8 },
-  meta: { color: T.muted, fontSize: 13, marginTop: 6 },
-  emptyIcon: { fontSize: 40, marginBottom: 12 },
-  emptyTitle: { fontSize: 18, fontWeight: "700", color: T.ink },
-  emptyText: { color: T.muted, textAlign: "center", marginTop: 8, lineHeight: 20 },
+  ref: { ...F.mono },
+  pill: { paddingHorizontal: S.md, paddingVertical: 4, borderRadius: R.pill },
+  pillText: { fontSize: 11, fontWeight: "800", letterSpacing: 0.2 },
+  title: { ...F.heading, marginTop: S.sm },
+  metaRow: {
+    flexDirection: "row", justifyContent: "space-between",
+    alignItems: "center", marginTop: S.sm,
+  },
+  meta: { ...F.caption, flex: 1, paddingRight: S.sm },
+  time: { ...F.caption, fontSize: 12 },
 });

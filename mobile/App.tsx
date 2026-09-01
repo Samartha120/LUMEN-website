@@ -12,15 +12,9 @@ import MyReportsScreen from "./src/screens/MyReportsScreen";
 import AlertsScreen from "./src/screens/AlertsScreen";
 import DetailScreen from "./src/screens/DetailScreen";
 import { C, S, R } from "./src/theme";
+import { Icon, IconName } from "./src/Icon";
 
 type Tab = "report" | "reports" | "alerts";
-
-function greeting() {
-  const h = new Date().getHours();
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  return "Good evening";
-}
 
 /**
  * Navigation is a piece of state rather than a router.
@@ -32,7 +26,7 @@ function greeting() {
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [checking, setChecking] = useState(true);
-  const [tab, setTab] = useState<Tab>("report");
+  const [tab, setTab] = useState<Tab>("reports");
   const [openRef, setOpenRef] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [unread, setUnread] = useState(0);
@@ -64,7 +58,7 @@ export default function App() {
     await clearToken();
     setUser(null);
     setOpenRef(null);
-    setTab("report");
+    setTab("reports");
   }
 
   if (checking) {
@@ -87,22 +81,19 @@ export default function App() {
 
   return (
     <SafeAreaView style={s.safe}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <View style={s.bar}>
-        <View style={s.barLeft}>
+        <Text style={s.wordmark}>LUMEN</Text>
+        <View style={s.barRight}>
+          <Pressable onPress={signOut} hitSlop={10} style={s.signOutBtn}>
+            <Text style={s.signOut}>Sign out</Text>
+          </Pressable>
           <View style={s.avatar}>
             <Text style={s.avatarText}>
               {String(user?.name ?? "?").trim().charAt(0).toUpperCase()}
             </Text>
           </View>
-          <View>
-            <Text style={s.hello}>{greeting()}</Text>
-            <Text style={s.who} numberOfLines={1}>{user?.name ?? "Citizen"}</Text>
-          </View>
         </View>
-        <Pressable onPress={signOut} hitSlop={10} style={s.signOutBtn}>
-          <Text style={s.signOut}>Sign out</Text>
-        </Pressable>
       </View>
 
       <View style={s.body}>
@@ -113,7 +104,7 @@ export default function App() {
             onFiled={() => { setReloadKey((k) => k + 1); setTab("reports"); }}
           />
         ) : tab === "reports" ? (
-          <MyReportsScreen onOpen={setOpenRef} reloadKey={reloadKey} />
+          <MyReportsScreen onOpen={setOpenRef} reloadKey={reloadKey} name={user?.name} />
         ) : (
           <AlertsScreen onOpen={setOpenRef} onRead={() => setReloadKey((k) => k + 1)} />
         )}
@@ -121,67 +112,91 @@ export default function App() {
 
       {!openRef && (
         <View style={s.tabs}>
-          <Pressable style={s.tab} onPress={() => setTab("report")}>
-            <Text style={[s.tabIcon, tab === "report" && s.tabOn]}>＋</Text>
-            <Text style={[s.tabText, tab === "report" && s.tabOn]}>Report</Text>
+          <TabButton icon="home" label="Home" on={tab === "reports"}
+            onPress={() => { setTab("reports"); setReloadKey((k) => k + 1); }} />
+
+          {/* Reporting is the reason the app exists, so it is not a tab
+              competing with the others — it is the button in the middle. */}
+          <Pressable
+            style={({ pressed }) => [s.fab, pressed && { transform: [{ scale: 0.96 }] }]}
+            onPress={() => setTab("report")}
+          >
+            <Icon name="camera" size={23} color={C.brand} />
           </Pressable>
-          <Pressable style={s.tab} onPress={() => { setTab("reports"); setReloadKey((k) => k + 1); }}>
-            <Text style={[s.tabIcon, tab === "reports" && s.tabOn]}>☰</Text>
-            <Text style={[s.tabText, tab === "reports" && s.tabOn]}>My reports</Text>
-          </Pressable>
-          <Pressable style={s.tab} onPress={() => { setTab("alerts"); setReloadKey((k) => k + 1); }}>
-            <View>
-              <Text style={[s.tabIcon, tab === "alerts" && s.tabOn]}>🔔</Text>
-              {unread > 0 && (
-                <View style={s.badge}>
-                  <Text style={s.badgeText}>{unread > 9 ? "9+" : unread}</Text>
-                </View>
-              )}
-            </View>
-            <Text style={[s.tabText, tab === "alerts" && s.tabOn]}>Updates</Text>
-          </Pressable>
+
+          <TabButton icon="bell" label="Updates" on={tab === "alerts"} badge={unread}
+            onPress={() => { setTab("alerts"); setReloadKey((k) => k + 1); }} />
         </View>
       )}
     </SafeAreaView>
   );
 }
 
+function TabButton({ icon, label, on, badge = 0, onPress }: {
+  icon: IconName; label: string; on: boolean; badge?: number; onPress: () => void;
+}) {
+  return (
+    <Pressable style={s.tab} onPress={onPress}>
+      {/* The active tab gets a bar above it as well as colour, so the state is
+          not carried by hue alone. */}
+      <View style={[s.tabMark, on && s.tabMarkOn]} />
+      <View>
+        <Icon name={icon} size={21} color={on ? C.ink : C.muted} />
+        {badge > 0 && (
+          <View style={s.badge}>
+            <Text style={s.badgeText}>{badge > 9 ? "9+" : badge}</Text>
+          </View>
+        )}
+      </View>
+      <Text style={[s.tabText, on && s.tabOn]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 const s = StyleSheet.create({
   safe: {
-    flex: 1, backgroundColor: C.brand,
+    flex: 1, backgroundColor: C.bg,
     paddingTop: Platform.OS === "android" ? RNStatusBar.currentHeight : 0,
   },
-  boot: { flex: 1, backgroundColor: C.brand, alignItems: "center", justifyContent: "center" },
+  boot: { flex: 1, backgroundColor: C.dark, alignItems: "center", justifyContent: "center" },
   bootLogo: { color: "#fff", fontSize: 28, fontWeight: "800", letterSpacing: 6, marginBottom: S.lg },
   bar: {
-    backgroundColor: C.brand, paddingHorizontal: S.xl, paddingVertical: S.md,
+    backgroundColor: C.bg, paddingHorizontal: S.xl, paddingVertical: S.md,
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
   },
-  barLeft: { flexDirection: "row", alignItems: "center", gap: S.md, flex: 1 },
+  wordmark: { color: C.ink, fontWeight: "800", letterSpacing: 4, fontSize: 15 },
+  barRight: { flexDirection: "row", alignItems: "center", gap: S.md },
   avatar: {
-    width: 38, height: 38, borderRadius: 19, backgroundColor: "rgba(255,255,255,0.16)",
+    width: 38, height: 38, borderRadius: 19, backgroundColor: C.brand,
     alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.22)",
   },
-  avatarText: { color: "#fff", fontWeight: "800", fontSize: 16 },
-  hello: { color: "#b9c3ff", fontSize: 11, fontWeight: "600", letterSpacing: 0.3 },
-  who: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  avatarText: { color: C.ink, fontWeight: "800", fontSize: 16 },
   signOutBtn: {
     paddingHorizontal: S.md, paddingVertical: 6, borderRadius: R.pill,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.line,
   },
-  signOut: { color: "#dfe4ff", fontSize: 12, fontWeight: "700" },
+  signOut: { color: C.body, fontSize: 12, fontWeight: "700" },
   body: { flex: 1, backgroundColor: C.bg },
   tabs: {
-    flexDirection: "row", backgroundColor: C.surface,
+    flexDirection: "row", alignItems: "center", backgroundColor: C.surface,
     borderTopWidth: 1, borderTopColor: C.line, paddingBottom: S.sm, paddingTop: 6,
   },
-  tab: { flex: 1, alignItems: "center", paddingVertical: 8 },
-  tabIcon: { fontSize: 19, color: C.muted },
+  fab: {
+    width: 58, height: 58, borderRadius: 29, backgroundColor: C.dark,
+    alignItems: "center", justifyContent: "center", marginTop: -26,
+    borderWidth: 4, borderColor: C.surface,
+    shadowColor: "#3a3226", shadowOpacity: 0.28, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 }, elevation: 8,
+  },
+  tab: { flex: 1, alignItems: "center", paddingBottom: 8 },
+  tabMark: {
+    width: 26, height: 3, borderRadius: 2, backgroundColor: "transparent", marginBottom: 8,
+  },
+  tabMarkOn: { backgroundColor: C.ink },
   tabText: { fontSize: 11, color: C.muted, marginTop: 3, fontWeight: "700" },
-  tabOn: { color: C.brand },
+  tabOn: { color: C.ink },
   badge: {
-    position: "absolute", top: -5, right: -11, backgroundColor: C.bad,
+    position: "absolute", top: -5, right: -11, backgroundColor: C.coral,
     minWidth: 18, height: 18, borderRadius: 9, alignItems: "center",
     justifyContent: "center", paddingHorizontal: 4,
     borderWidth: 2, borderColor: C.surface,

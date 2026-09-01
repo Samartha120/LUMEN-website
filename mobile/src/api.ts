@@ -1,5 +1,7 @@
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Platform } from "react-native";
 
 /**
  * Where the backend lives.
@@ -16,20 +18,38 @@ export const API_URL: string =
 
 const TOKEN_KEY = "lumen_token";
 
-// SecureStore is backed by the iOS keychain and Android keystore, so the
-// session survives a restart without sitting in plain text on the device.
+/**
+ * Where the session token lives.
+ *
+ * On a phone: SecureStore, which is the iOS keychain and the Android keystore,
+ * so the session survives a restart without sitting in plain text on the
+ * device. SecureStore has no web implementation at all — it throws — so the
+ * browser falls back to AsyncStorage, which there is localStorage. That is a
+ * genuinely weaker place to keep a token, and it is the reason the browser
+ * build is for trying the app out rather than for real use.
+ */
+const secure = Platform.OS !== "web";
+
 export async function saveToken(token: string) {
-  await SecureStore.setItemAsync(TOKEN_KEY, token);
+  if (secure) await SecureStore.setItemAsync(TOKEN_KEY, token);
+  else await AsyncStorage.setItem(TOKEN_KEY, token);
 }
 export async function loadToken(): Promise<string | null> {
   try {
-    return await SecureStore.getItemAsync(TOKEN_KEY);
+    return secure
+      ? await SecureStore.getItemAsync(TOKEN_KEY)
+      : await AsyncStorage.getItem(TOKEN_KEY);
   } catch {
     return null;
   }
 }
 export async function clearToken() {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
+  try {
+    if (secure) await SecureStore.deleteItemAsync(TOKEN_KEY);
+    else await AsyncStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* nothing to clear */
+  }
 }
 
 export type ApiError = { status: number; message: string };

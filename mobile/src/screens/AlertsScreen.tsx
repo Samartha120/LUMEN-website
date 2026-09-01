@@ -28,7 +28,7 @@ export default function AlertsScreen({ onOpen, onRead }: {
   useEffect(() => { load(); }, [load]);
 
   if (items === null) {
-    return <View style={s.centre}><ActivityIndicator size="large" color={C.brand} /></View>;
+    return <View style={s.centre}><ActivityIndicator size="large" color={C.ink} /></View>;
   }
 
   const unread = items.filter((n) => !n.readAt).length;
@@ -57,7 +57,7 @@ export default function AlertsScreen({ onOpen, onRead }: {
       }
       ListEmptyComponent={
         <Empty
-          icon={error ? "⚠️" : "🔔"}
+          icon={error ? "alert-triangle" : "bell"}
           title={error ? "Could not load" : "No updates yet"}
           body={error ?? "When a department picks up or resolves one of your reports, it appears here."}
         />
@@ -98,12 +98,12 @@ const s = StyleSheet.create({
     alignItems: "center", marginBottom: S.lg,
   },
   h1: { ...F.display },
-  readAll: { color: C.accent, fontWeight: "700", fontSize: 13 },
+  readAll: { color: C.ink, fontWeight: "800", fontSize: 13 },
   card: { ...card, marginBottom: S.md },
-  cardUnread: { borderColor: "#cfd8ff", backgroundColor: "#f7f9ff" },
+  cardUnread: { borderColor: C.brand, backgroundColor: C.brandSoft },
   rowTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
   title: { ...F.bodyStrong, flex: 1, paddingRight: S.md },
-  dot: { width: 9, height: 9, borderRadius: 5, backgroundColor: C.accent, marginTop: 6 },
+  dot: { width: 9, height: 9, borderRadius: 5, backgroundColor: C.coral, marginTop: 6 },
   body: { ...F.body, marginTop: 6 },
   metaRow: { flexDirection: "row", justifyContent: "space-between", marginTop: S.md },
   meta: { ...F.caption, fontSize: 12, fontWeight: "600" },

@@ -102,19 +102,21 @@ export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => vo
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.brand },
+  root: { flex: 1, backgroundColor: C.bg },
   scroll: { flexGrow: 1, padding: S.xl, justifyContent: "center" },
   brand: { alignItems: "center", marginBottom: S.xxl },
   mark: {
-    width: 60, height: 60, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.14)",
+    width: 64, height: 64, borderRadius: 32, backgroundColor: C.brand,
     alignItems: "center", justifyContent: "center", marginBottom: S.md,
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
   },
-  markText: { color: "#fff", fontSize: 28, fontWeight: "800" },
-  logo: { color: "#fff", fontSize: 26, fontWeight: "800", letterSpacing: 6 },
-  tag: { color: "#c3ccff", marginTop: S.sm, fontSize: 14, letterSpacing: 0.2 },
+  markText: { color: C.ink, fontSize: 28, fontWeight: "800" },
+  logo: { color: C.ink, fontSize: 26, fontWeight: "800", letterSpacing: 6 },
+  tag: { ...F.caption, marginTop: S.sm, fontSize: 14 },
 
-  card: { backgroundColor: C.surface, borderRadius: R.xl, padding: S.xl, ...E.raised },
+  card: {
+    backgroundColor: C.surface, borderRadius: R.xl, padding: S.xl,
+    borderWidth: 1, borderColor: C.line, ...E.raised,
+  },
   h1: { ...F.title },
   h2: { ...F.caption, marginTop: S.xs, marginBottom: S.lg },
 
@@ -123,7 +125,7 @@ const s = StyleSheet.create({
     borderWidth: 1.5, borderColor: C.line, borderRadius: R.md, backgroundColor: C.bg,
     paddingHorizontal: S.md, paddingVertical: 13, fontSize: 16, color: C.ink,
   },
-  inputFocus: { borderColor: C.accent, backgroundColor: C.surface },
+  inputFocus: { borderColor: C.ink, backgroundColor: C.surface },
 
   errorBox: {
     backgroundColor: C.badSoft, borderRadius: R.md, padding: S.md, marginTop: S.lg,
@@ -132,6 +134,6 @@ const s = StyleSheet.create({
   errorText: { color: C.bad, fontSize: 13, lineHeight: 19 },
 
   switch: { ...F.caption, textAlign: "center", marginTop: S.lg },
-  switchStrong: { color: C.accent, fontWeight: "700" },
-  foot: { color: "rgba(255,255,255,0.5)", textAlign: "center", marginTop: S.xl, fontSize: 11 },
+  switchStrong: { color: C.ink, fontWeight: "800" },
+  foot: { color: C.muted, textAlign: "center", marginTop: S.xl, fontSize: 11 },
 });

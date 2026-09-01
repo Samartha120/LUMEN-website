@@ -5,8 +5,8 @@ import {
 } from "react-native";
 import { myComplaints, Complaint } from "../api";
 import { readOutbox, flushOutbox, Queued } from "../outbox";
-import { C, S, R, F, card, tone, statusLabel, ago } from "../theme";
-import { Chip, Empty } from "../ui";
+import { C, S, R, F, card, tone, statusLabel, ago, stageOf, STAGES } from "../theme";
+import { Chip, Empty, StatusCard, TileRow, BigStat } from "../ui";
 
 const FILTERS = ["All", "Open", "Resolved"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -15,9 +15,17 @@ type Filter = (typeof FILTERS)[number];
 // have to learn the workflow's vocabulary to filter their own reports.
 const DONE = ["RESOLVED", "CLOSED", "REJECTED"];
 
-export default function MyReportsScreen({ onOpen, reloadKey }: {
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+export default function MyReportsScreen({ onOpen, reloadKey, name }: {
   onOpen: (ref: string) => void;
   reloadKey: number;
+  name?: string;
 }) {
   const [items, setItems] = useState<Complaint[] | null>(null);
   const [queued, setQueued] = useState<Queued[]>([]);
@@ -71,6 +79,7 @@ export default function MyReportsScreen({ onOpen, reloadKey }: {
   }
 
   const resolved = items.filter((c) => DONE.includes((c.status ?? "").toUpperCase())).length;
+  const urgent = items.filter((c) => ["HIGH", "CRITICAL"].includes((c.priority ?? "").toUpperCase())).length;
 
   return (
     <FlatList
@@ -85,25 +94,51 @@ export default function MyReportsScreen({ onOpen, reloadKey }: {
       ListHeaderComponent={
         items.length ? (
           <View>
-            <Text style={s.h1}>My reports</Text>
+            {/* The yellow disc sits behind the greeting, as in the reference:
+                one spot of colour to anchor the page, carrying no information. */}
+            <View style={s.blob} />
+            <Text style={s.hello}>{greeting()}, {(name ?? "there").split(" ")[0]}</Text>
+            <Text style={s.today}>{new Date().toLocaleDateString(undefined, {
+              weekday: "long", month: "long", day: "numeric",
+            })}</Text>
 
-            <View style={s.stats}>
-              <Stat n={items.length} label="filed" />
-              <Stat n={items.length - resolved} label="open" tint={C.warn} />
-              <Stat n={resolved} label="resolved" tint={C.ok} />
+            <Text style={s.section}>Latest report</Text>
+            <StatusCard
+              ref_={items[0].ref}
+              title={items[0].title}
+              status={items[0].status}
+              priority={items[0].priority}
+              onPress={() => onOpen(items[0].ref)}
+            />
+
+            <Text style={s.section}>At a glance</Text>
+            <View style={{ gap: S.md }}>
+              <BigStat
+                value={String(items.length - resolved)}
+                unit={items.length - resolved === 1 ? "open" : "open"}
+                label={`of your ${items.length} report${items.length === 1 ? "" : "s"} still being worked on`}
+              />
+              <TileRow
+                icon="check-circle" tint="brand"
+                title="Resolved for you"
+                value={`${resolved} report${resolved === 1 ? "" : "s"}`}
+              />
+              {queued.length > 0 ? (
+                <TileRow
+                  icon="wifi-off" tint="coral"
+                  title="Waiting to send — saved on this phone"
+                  value={`${queued.length} report${queued.length === 1 ? "" : "s"}`}
+                />
+              ) : (
+                <TileRow
+                  icon="alert-triangle" tint="accent"
+                  title="Marked urgent by the detector"
+                  value={`${urgent} report${urgent === 1 ? "" : "s"}`}
+                />
+              )}
             </View>
 
-            {queued.length > 0 && (
-              <View style={s.queued}>
-                <Text style={s.queuedTitle}>
-                  {queued.length} report{queued.length === 1 ? "" : "s"} waiting to send
-                </Text>
-                <Text style={s.queuedBody}>
-                  Saved on this phone. They go out automatically when you are back online.
-                </Text>
-              </View>
-            )}
-
+            <Text style={s.section}>All reports</Text>
             <TextInput style={s.search} value={q} onChangeText={setQ}
               placeholder="Search your reports" placeholderTextColor={C.muted}
               autoCorrect={false} />
@@ -118,7 +153,7 @@ export default function MyReportsScreen({ onOpen, reloadKey }: {
       }
       ListEmptyComponent={
         <Empty
-          icon={error ? "⚠️" : items.length ? "🔍" : "📷"}
+          icon={error ? "alert-triangle" : items.length ? "search" : "camera"}
           title={error ? "Could not load" : items.length ? "Nothing matches" : "No reports yet"}
           body={
             error ??
@@ -159,36 +194,22 @@ export default function MyReportsScreen({ onOpen, reloadKey }: {
   );
 }
 
-function Stat({ n, label, tint }: { n: number; label: string; tint?: string }) {
-  return (
-    <View style={[card, s.stat]}>
-      <Text style={[s.statN, tint ? { color: tint } : null]}>{n}</Text>
-      <Text style={s.statL}>{label}</Text>
-    </View>
-  );
-}
-
 const s = StyleSheet.create({
   list: { padding: S.xl, paddingBottom: S.xxxl, backgroundColor: C.bg },
   listEmpty: { flexGrow: 1, backgroundColor: C.bg, padding: S.xl },
   centre: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: C.bg },
-  h1: { ...F.display, marginBottom: S.lg },
-
-  stats: { flexDirection: "row", gap: S.md, marginBottom: S.lg },
-  stat: { flex: 1, alignItems: "center", paddingVertical: S.md, paddingHorizontal: 0 },
-  statN: { fontSize: 22, fontWeight: "800", color: C.brand, letterSpacing: -0.5 },
-  statL: { ...F.caption, fontSize: 11, marginTop: 2, textTransform: "uppercase", letterSpacing: 0.6 },
-
-  queued: {
-    backgroundColor: C.warnSoft, borderWidth: 1, borderColor: "#f3ddc0",
-    borderRadius: R.md, padding: S.lg, marginBottom: S.lg,
+  blob: {
+    position: "absolute", top: -34, left: -42, width: 104, height: 104,
+    borderRadius: 52, backgroundColor: C.brand,
   },
-  queuedTitle: { color: C.warn, fontWeight: "800", fontSize: 14 },
-  queuedBody: { color: C.warn, fontSize: 13, lineHeight: 19, marginTop: 3, opacity: 0.9 },
+  hello: { ...F.display, fontSize: 26 },
+  today: { ...F.caption, marginTop: 2, marginBottom: S.xxl },
+  section: { ...F.overline, marginTop: S.xxl, marginBottom: S.md },
 
   search: {
-    backgroundColor: C.surface, borderWidth: 1.5, borderColor: C.line, borderRadius: R.md,
-    paddingHorizontal: S.md, paddingVertical: 11, fontSize: 15, color: C.ink,
+    backgroundColor: C.surface, borderWidth: 1.5, borderColor: C.lineStrong,
+    borderRadius: R.pill, paddingHorizontal: S.xl, paddingVertical: 13,
+    fontSize: 15, color: C.ink,
   },
   filters: { flexDirection: "row", gap: S.sm, marginTop: S.md, marginBottom: S.lg },
 

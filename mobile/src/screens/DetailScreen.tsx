@@ -4,7 +4,8 @@ import {
 } from "react-native";
 import { complaint, mediaUrl, ComplaintDetail, Detection } from "../api";
 import { C, S, R, F, card, tone, statusLabel, ago } from "../theme";
-import { Meter, SectionTitle } from "../ui";
+import { Meter, SectionTitle, StatusCard } from "../ui";
+import { Icon } from "../Icon";
 
 export default function DetailScreen({ refCode, onBack }: {
   refCode: string;
@@ -25,7 +26,7 @@ export default function DetailScreen({ refCode, onBack }: {
       </View>
     );
   }
-  if (!c) return <View style={s.centre}><ActivityIndicator size="large" color={C.brand} /></View>;
+  if (!c) return <View style={s.centre}><ActivityIndicator size="large" color={C.ink} /></View>;
 
   const image = c.images?.[0];
   // The annotated copy is what the detector produced: boxes for potholes and
@@ -43,22 +44,25 @@ export default function DetailScreen({ refCode, onBack }: {
   return (
     <ScrollView contentContainerStyle={s.wrap}>
       <Pressable onPress={onBack} hitSlop={12} style={s.backRow}>
-        <Text style={s.back}>←  My reports</Text>
+        <View style={s.backInner}>
+          <Icon name="chevron-left" size={18} color={C.ink} />
+          <Text style={s.back}>My reports</Text>
+        </View>
       </Pressable>
 
-      <View style={s.head}>
-        <Text style={s.ref}>{c.ref}</Text>
-        <View style={[s.pill, { backgroundColor: t.bg }]}>
-          <Text style={[s.pillText, { color: t.fg }]}>{statusLabel(c.status)}</Text>
-        </View>
-      </View>
-      <Text style={s.title}>{c.title}</Text>
-      <Text style={s.meta}>
+      <StatusCard ref_={c.ref} title={c.title} status={c.status} priority={c.priority} />
+
+      <Text style={[s.meta, { marginTop: S.lg }]}>
         {c.category ?? "Unclassified"}
         {c.department?.name ? `  ·  ${c.department.name}` : ""}
         {c.createdAt ? `  ·  ${ago(c.createdAt)}` : ""}
       </Text>
-      {c.address && <Text style={s.address}>📍 {c.address}</Text>}
+      {c.address && (
+        <View style={s.addressRow}>
+          <Icon name="map-pin" size={13} color={C.muted} />
+          <Text style={s.address}>{c.address}</Text>
+        </View>
+      )}
 
       {shown && (
         <View style={s.imageWrap}>
@@ -129,16 +133,17 @@ const s = StyleSheet.create({
   wrap: { padding: S.xl, paddingBottom: S.xxxl, backgroundColor: C.bg, flexGrow: 1 },
   centre: { flex: 1, alignItems: "center", justifyContent: "center", padding: S.xxl, backgroundColor: C.bg },
   backRow: { marginBottom: S.lg },
-  back: { color: C.accent, fontWeight: "700", fontSize: 14 },
+  backInner: { flexDirection: "row", alignItems: "center", marginLeft: -4 },
+  back: { color: C.ink, fontWeight: "800", fontSize: 14 },
   err: { color: C.bad, marginBottom: S.lg, textAlign: "center" },
 
-  head: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   ref: { ...F.mono },
   pill: { paddingHorizontal: S.md, paddingVertical: 4, borderRadius: R.pill },
   pillText: { fontSize: 11, fontWeight: "800", letterSpacing: 0.2 },
   title: { ...F.title, marginTop: S.sm },
   meta: { ...F.caption, marginTop: 6 },
-  address: { ...F.caption, marginTop: S.xs },
+  addressRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: S.xs },
+  address: { ...F.caption },
 
   imageWrap: { marginTop: S.lg, borderRadius: R.lg, overflow: "hidden", backgroundColor: C.raised },
   image: { width: "100%", height: 250 },
@@ -156,7 +161,7 @@ const s = StyleSheet.create({
   },
   detLabel: { ...F.bodyStrong },
   detKind: { ...F.caption, fontSize: 11, marginTop: 1 },
-  detConf: { fontSize: 17, fontWeight: "800", color: C.accent },
+  detConf: { fontSize: 17, fontWeight: "800", color: C.ink },
 
   sevRow: { flexDirection: "row", alignItems: "baseline" },
   sevNum: { fontSize: 30, fontWeight: "800", color: C.ink, letterSpacing: -1 },
@@ -169,7 +174,7 @@ const s = StyleSheet.create({
   node: {
     width: 9, height: 9, borderRadius: 5, backgroundColor: C.lineStrong, marginTop: 6,
   },
-  nodeFirst: { backgroundColor: C.brand, width: 11, height: 11, borderRadius: 6 },
+  nodeFirst: { backgroundColor: C.ink, width: 11, height: 11, borderRadius: 6 },
   line: { flex: 1, width: 1.5, backgroundColor: C.line, marginVertical: 3 },
   eventBody: { flex: 1, paddingBottom: S.lg, paddingLeft: S.sm },
   eventType: { ...F.overline, fontSize: 10, color: C.body },

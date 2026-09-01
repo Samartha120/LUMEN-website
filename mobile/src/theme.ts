@@ -7,47 +7,72 @@ import { Platform, TextStyle, ViewStyle } from "react-native";
  * frequently by someone who is annoyed — legibility beats decoration.
  */
 
-// A single neutral ramp. Named by weight so intent survives a palette change:
-// ink is what you read, muted is what you glance at, line is what separates.
-const grey = {
-  50: "#f6f7fb",
-  100: "#eef0f6",
-  200: "#e3e6ef",
-  300: "#cbd2e0",
-  500: "#7b869c",
-  700: "#414b60",
-  900: "#131a2a",
-};
-
 export const C = {
-  brand: "#1e2a78",
-  brandDeep: "#141c56",
-  brandSoft: "#eef1ff",
-  accent: "#2f5fe0",
+  // After the Mobi reference: warm cream ground, one strong yellow, and black
+  // reserved for the thing you are meant to read first. Yellow can never carry
+  // text, so it always appears as a fill with ink on top of it.
+  brand: "#ffc93c",
+  brandDeep: "#f0b21b",
+  brandSoft: "#fff4d1",
+  accent: "#7b61ff",
+  accentSoft: "#efeaff",
+  coral: "#ff5c5c",
+  coralSoft: "#ffe9e9",
+  sky: "#5bc0eb",
+  skySoft: "#e4f5fd",
 
-  bg: grey[50],
+  // The emphasis surface. One per screen at most.
+  dark: "#141414",
+  darkSoft: "#2a2a2a",
+  onDark: "#ffffff",
+  onDarkMuted: "#a3a3a3",
+
+  bg: "#fdfaf1",
   surface: "#ffffff",
-  raised: grey[100],
-  line: grey[200],
-  lineStrong: grey[300],
+  raised: "#f6f2e7",
+  line: "#ece7da",
+  lineStrong: "#dcd5c4",
 
-  ink: grey[900],
-  body: grey[700],
-  muted: grey[500],
-  onBrand: "#ffffff",
+  ink: "#141414",
+  body: "#4a4a4a",
+  muted: "#8c8779",
+  onBrand: "#141414",
 
-  ok: "#0f7a52",
-  okSoft: "#e6f5ee",
-  warn: "#a35a06",
-  warnSoft: "#fdf1e3",
-  bad: "#b3261e",
-  badSoft: "#fdeceb",
+  ok: "#1f9d55",
+  okSoft: "#e6f6ed",
+  warn: "#c07d0a",
+  warnSoft: "#fdf3df",
+  bad: "#e23b3b",
+  badSoft: "#ffe9e9",
 };
+
+/**
+ * Where a report has got to, in the three steps a citizen cares about.
+ *
+ * The workflow has more states than this, and none of them mean anything to
+ * the person who filed it. Filed, being worked on, done.
+ */
+export const STAGES = ["Filed", "In progress", "Resolved"] as const;
+
+export function stageOf(status?: string | null): number {
+  switch ((status ?? "").toUpperCase()) {
+    case "RESOLVED":
+    case "CLOSED":
+    case "REJECTED":
+      return 2;
+    case "ASSIGNED":
+    case "IN_PROGRESS":
+    case "PENDING_REVIEW":
+      return 1;
+    default:
+      return 0;
+  }
+}
 
 /** 4-point rhythm. Every margin and pad in the app comes from here. */
 export const S = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28, xxxl: 40 };
 
-export const R = { sm: 8, md: 12, lg: 16, xl: 22, pill: 999 };
+export const R = { sm: 10, md: 14, lg: 20, xl: 26, pill: 999 };
 
 /**
  * Type scale. Line heights are set explicitly rather than left to the platform,
@@ -67,7 +92,7 @@ export const F: Record<string, TextStyle> = {
   },
   mono: {
     fontSize: 12, lineHeight: 16, fontWeight: "700", letterSpacing: 0.6,
-    color: C.accent, fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
+    color: C.muted, fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
   },
 };
 
@@ -79,7 +104,7 @@ export const F: Record<string, TextStyle> = {
 export const E: Record<"card" | "raised", ViewStyle> = {
   card: Platform.select({
     ios: {
-      shadowColor: "#0b1220", shadowOpacity: 0.05,
+      shadowColor: "#3a3226", shadowOpacity: 0.05,
       shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
     },
     android: { elevation: 1 },
@@ -87,7 +112,7 @@ export const E: Record<"card" | "raised", ViewStyle> = {
   })!,
   raised: Platform.select({
     ios: {
-      shadowColor: "#0b1220", shadowOpacity: 0.1,
+      shadowColor: "#3a3226", shadowOpacity: 0.09,
       shadowRadius: 18, shadowOffset: { width: 0, height: 8 },
     },
     android: { elevation: 5 },

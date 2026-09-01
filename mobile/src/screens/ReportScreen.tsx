@@ -9,6 +9,7 @@ import { submitReport, previewPhoto, Preview } from "../api";
 import { enqueue, isOnline } from "../outbox";
 import { C, S, R, F, card, tone } from "../theme";
 import { Button, Meter } from "../ui";
+import { Icon } from "../Icon";
 
 const MAX_PHOTOS = 5;
 
@@ -155,11 +156,11 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
         <View style={s.pickRow}>
           <Pressable style={({ pressed }) => [s.pick, s.pickPrimary, pressed && s.pickPressed]}
             onPress={takePhoto}>
-            <Text style={s.pickIcon}>📷</Text>
+            <Icon name="camera" size={22} color={C.brand} />
             <Text style={s.pickTextPrimary}>{photos.length ? "Add photo" : "Take photo"}</Text>
           </Pressable>
           <Pressable style={({ pressed }) => [s.pick, pressed && s.pickPressed]} onPress={pickPhoto}>
-            <Text style={s.pickIcon}>🖼️</Text>
+            <Icon name="image" size={22} color={C.body} />
             <Text style={s.pickText}>From gallery</Text>
           </Pressable>
         </View>
@@ -172,8 +173,13 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
         <Pressable style={({ pressed }) => [s.checkBtn, pressed && s.checkPressed]}
           onPress={check} disabled={checking}>
           {checking
-            ? <ActivityIndicator color={C.brand} />
-            : <Text style={s.checkText}>Check what the AI sees</Text>}
+            ? <ActivityIndicator color={C.ink} />
+            : (
+              <View style={s.checkInner}>
+                <Icon name="cpu" size={17} color={C.ink} />
+                <Text style={s.checkText}>Check what the AI sees</Text>
+              </View>
+            )}
         </Pressable>
       )}
 
@@ -189,12 +195,15 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
       />
 
       <Pressable style={s.locRow} onPress={locate} disabled={locating}>
+        <View style={s.locIcon}>
+          <Icon name="map-pin" size={17} color={coords ? C.ok : C.muted} />
+        </View>
         <View style={{ flex: 1 }}>
           <Text style={s.locTitle}>{coords ? "Location attached" : "Add your location"}</Text>
           <Text style={s.locSub}>
             {coords
               ? `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`
-              : "Helps route the report to the right ward"}
+              : "Routes it to the right ward"}
           </Text>
         </View>
         <Text style={s.locAction}>{locating ? "…" : coords ? "Update" : "Use GPS"}</Text>
@@ -263,7 +272,7 @@ const s = StyleSheet.create({
 
   steps: { flexDirection: "row", gap: 6, marginTop: S.xl },
   stepBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: C.line },
-  stepBarOn: { backgroundColor: C.brand },
+  stepBarOn: { backgroundColor: C.ink },
   legend: { ...F.caption, marginTop: S.sm, marginBottom: S.lg },
 
   strip: { marginBottom: S.md },
@@ -286,11 +295,10 @@ const s = StyleSheet.create({
     flex: 1, backgroundColor: C.surface, borderRadius: R.lg, paddingVertical: S.xl,
     alignItems: "center", borderWidth: 1.5, borderColor: C.line,
   },
-  pickPrimary: { backgroundColor: C.brand, borderColor: C.brand },
+  pickPrimary: { backgroundColor: C.dark, borderColor: C.dark },
   pickPressed: { opacity: 0.92 },
-  pickIcon: { fontSize: 24, marginBottom: 6 },
-  pickText: { ...F.bodyStrong, color: C.body },
-  pickTextPrimary: { ...F.bodyStrong, color: C.onBrand },
+  pickText: { ...F.bodyStrong, color: C.body, marginTop: S.sm },
+  pickTextPrimary: { ...F.bodyStrong, color: "#fff", marginTop: S.sm },
   counter: { ...F.caption, marginTop: S.md, textAlign: "center" },
 
   checkBtn: {
@@ -299,6 +307,7 @@ const s = StyleSheet.create({
     justifyContent: "center",
   },
   checkPressed: { backgroundColor: "#e3e9ff" },
+  checkInner: { flexDirection: "row", alignItems: "center", gap: S.sm },
   checkText: { color: C.brand, fontWeight: "800", fontSize: 15 },
 
   preview: { marginTop: S.lg, padding: 0, overflow: "hidden" },
@@ -314,7 +323,7 @@ const s = StyleSheet.create({
     paddingVertical: 9, borderTopWidth: 1, borderTopColor: C.line, marginTop: S.sm,
   },
   detLabel: { ...F.bodyStrong },
-  detConf: { ...F.bodyStrong, color: C.accent },
+  detConf: { ...F.bodyStrong, color: C.ink },
   sevText: { ...F.caption, marginTop: 6 },
   previewNote: { ...F.caption, fontSize: 12, marginTop: S.md, fontStyle: "italic" },
 
@@ -323,8 +332,12 @@ const s = StyleSheet.create({
     backgroundColor: C.surface, borderWidth: 1.5, borderColor: C.line, borderRadius: R.md,
     padding: S.md, fontSize: 16, minHeight: 78, textAlignVertical: "top", color: C.ink,
   },
-  inputFocus: { borderColor: C.accent },
+  inputFocus: { borderColor: C.ink },
 
+  locIcon: {
+    width: 34, height: 34, borderRadius: 17, backgroundColor: C.bg,
+    alignItems: "center", justifyContent: "center", marginRight: S.md,
+  },
   locRow: {
     flexDirection: "row", alignItems: "center", marginTop: S.lg,
     backgroundColor: C.surface, borderRadius: R.md, padding: S.lg,
@@ -332,7 +345,10 @@ const s = StyleSheet.create({
   },
   locTitle: { ...F.bodyStrong },
   locSub: { ...F.caption, marginTop: 2 },
-  locAction: { color: C.accent, fontWeight: "800", fontSize: 13 },
+  locAction: {
+    color: C.ink, fontWeight: "800", fontSize: 13,
+    paddingLeft: S.md,
+  },
 
   errorBox: {
     backgroundColor: C.badSoft, borderRadius: R.md, padding: S.md, marginTop: S.lg,

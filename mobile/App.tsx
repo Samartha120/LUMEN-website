@@ -5,7 +5,7 @@ import {
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { clearToken, loadToken, me, notifications } from "./src/api";
+import { clearToken, loadToken, me, notifications, isStaff } from "./src/api";
 import { flushOutbox } from "./src/outbox";
 import LoginScreen from "./src/screens/LoginScreen";
 import ReportScreen from "./src/screens/ReportScreen";
@@ -18,19 +18,27 @@ import OutboxScreen from "./src/screens/OutboxScreen";
 import HelpScreen from "./src/screens/HelpScreen";
 import OnboardingScreen, { SEEN_KEY } from "./src/screens/OnboardingScreen";
 import LockScreen from "./src/screens/LockScreen";
+import QueueScreen from "./src/screens/staff/QueueScreen";
+import TriageScreen from "./src/screens/staff/TriageScreen";
+import OpsScreen from "./src/screens/staff/OpsScreen";
+import AssistantScreen from "./src/screens/staff/AssistantScreen";
 import { C, S } from "./src/theme";
 import { Icon, IconName } from "./src/Icon";
 
-type Tab = "home" | "insights" | "report" | "alerts" | "profile";
+type Tab =
+  | "home" | "insights" | "report" | "alerts" | "profile"   // citizen
+  | "queue" | "ops" | "assistant";                          // staff
 /** Pushed over the tabs, and dismissed back to wherever you were. */
 type Sheet = { kind: "detail"; ref: string } | { kind: "outbox" } | { kind: "help" } | null;
 
 /**
  * Navigation is a piece of state rather than a router.
  *
- * Five tabs and three pushed screens, with no deep links and no back stack to
- * preserve. A router would be a dependency and a build step for what two union
- * types express, and every screen here is one tap away regardless.
+ * Two apps share this shell. A citizen gets Home, Impact, report, Updates and
+ * Profile; a supervisor or engineer gets the Queue, Operations and the
+ * assistant instead. Which one you see follows the role on the session, and
+ * the server enforces the same split independently — every staff endpoint
+ * checks the role itself, so hiding the tabs is a courtesy, not the control.
  */
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -50,7 +58,9 @@ export default function App() {
       const token = await loadToken();
       if (token) {
         try {
-          setUser(await me());
+          const u = await me();
+          setUser(u);
+          if (isStaff(u?.role)) setTab("queue");
           setLocked((await AsyncStorage.getItem(LOCK_KEY)) === "1");
         } catch {
           await clearToken();
@@ -100,7 +110,7 @@ export default function App() {
     return (
       <>
         <StatusBar style="dark" />
-        <LoginScreen onSignedIn={setUser} />
+        <LoginScreen onSignedIn={(u) => { setUser(u); if (isStaff(u?.role)) setTab("queue"); }} />
       </>
     );
   }
@@ -115,6 +125,8 @@ export default function App() {
   }
 
   const openDetail = (ref: string) => setSheet({ kind: "detail", ref });
+  const role = String(user?.role ?? "CITIZEN").toUpperCase();
+  const staff = isStaff(role);
 
   return (
     <SafeAreaView style={s.safe}>
@@ -132,13 +144,31 @@ export default function App() {
 
       <View style={s.body}>
         {sheet?.kind === "detail" ? (
-          <DetailScreen refCode={sheet.ref} onBack={() => setSheet(null)} />
+          // Staff get the version with the workflow buttons on it; a citizen
+          // gets the read-only one. Same complaint, different job.
+          staff ? (
+            <TriageScreen
+              refCode={sheet.ref} role={role}
+              onBack={() => setSheet(null)}
+              onChanged={() => setReloadKey((k) => k + 1)}
+            />
+          ) : (
+            <DetailScreen refCode={sheet.ref} onBack={() => setSheet(null)} />
+          )
         ) : sheet?.kind === "outbox" ? (
           <OutboxScreen onBack={() => setSheet(null)} onSent={() => setReloadKey((k) => k + 1)} />
         ) : sheet?.kind === "help" ? (
           <HelpScreen onBack={() => setSheet(null)} />
+        ) : tab === "queue" ? (
+          <QueueScreen onOpen={openDetail} reloadKey={reloadKey} />
+        ) : tab === "ops" ? (
+          <OpsScreen role={role} onOpen={openDetail} reloadKey={reloadKey} />
+        ) : tab === "assistant" ? (
+          <AssistantScreen />
         ) : tab === "report" ? (
-          <ReportScreen onFiled={() => { setReloadKey((k) => k + 1); setTab("home"); }} />
+          <ReportScreen onFiled={() => {
+            setReloadKey((k) => k + 1); setTab(staff ? "queue" : "home");
+          }} />
         ) : tab === "home" ? (
           <MyReportsScreen onOpen={openDetail} reloadKey={reloadKey} name={user?.name} />
         ) : tab === "insights" ? (
@@ -157,24 +187,48 @@ export default function App() {
 
       {!sheet && (
         <View style={s.tabs}>
-          <TabButton icon="home" label="Home" on={tab === "home"}
-            onPress={() => { setTab("home"); setReloadKey((k) => k + 1); }} />
-          <TabButton icon="bar-chart-2" label="Impact" on={tab === "insights"}
-            onPress={() => { setTab("insights"); setReloadKey((k) => k + 1); }} />
+          {staff ? (
+            <>
+              <TabButton icon="inbox" label="Queue" on={tab === "queue"}
+                onPress={() => { setTab("queue"); setReloadKey((k) => k + 1); }} />
+              <TabButton icon="map" label="Ops" on={tab === "ops"}
+                onPress={() => { setTab("ops"); setReloadKey((k) => k + 1); }} />
 
-          {/* Reporting is the reason the app exists, so it is not a tab
-              competing with the others — it is the button in the middle. */}
-          <Pressable
-            style={({ pressed }) => [s.fab, pressed && { transform: [{ scale: 0.96 }] }]}
-            onPress={() => setTab("report")}
-          >
-            <Icon name="camera" size={23} color={C.brand} />
-          </Pressable>
+              {/* Staff file reports too — often the first person on site. */}
+              <Pressable
+                style={({ pressed }) => [s.fab, pressed && { transform: [{ scale: 0.96 }] }]}
+                onPress={() => setTab("report")}
+              >
+                <Icon name="camera" size={23} color={C.brand} />
+              </Pressable>
 
-          <TabButton icon="bell" label="Updates" on={tab === "alerts"} badge={unread}
-            onPress={() => { setTab("alerts"); setReloadKey((k) => k + 1); }} />
-          <TabButton icon="user" label="Profile" on={tab === "profile"}
-            onPress={() => setTab("profile")} />
+              <TabButton icon="message-circle" label="Ask" on={tab === "assistant"}
+                onPress={() => setTab("assistant")} />
+              <TabButton icon="user" label="Profile" on={tab === "profile"}
+                onPress={() => setTab("profile")} />
+            </>
+          ) : (
+            <>
+              <TabButton icon="home" label="Home" on={tab === "home"}
+                onPress={() => { setTab("home"); setReloadKey((k) => k + 1); }} />
+              <TabButton icon="bar-chart-2" label="Impact" on={tab === "insights"}
+                onPress={() => { setTab("insights"); setReloadKey((k) => k + 1); }} />
+
+              {/* Reporting is the reason the app exists, so it is not a tab
+                  competing with the others — it is the button in the middle. */}
+              <Pressable
+                style={({ pressed }) => [s.fab, pressed && { transform: [{ scale: 0.96 }] }]}
+                onPress={() => setTab("report")}
+              >
+                <Icon name="camera" size={23} color={C.brand} />
+              </Pressable>
+
+              <TabButton icon="bell" label="Updates" on={tab === "alerts"} badge={unread}
+                onPress={() => { setTab("alerts"); setReloadKey((k) => k + 1); }} />
+              <TabButton icon="user" label="Profile" on={tab === "profile"}
+                onPress={() => setTab("profile")} />
+            </>
+          )}
         </View>
       )}
     </SafeAreaView>

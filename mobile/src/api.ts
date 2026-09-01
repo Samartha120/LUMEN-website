@@ -261,3 +261,168 @@ export type ComplaintDetail = Complaint & {
   }[];
   events: { id: string; type: string; message: string; createdAt: string }[];
 };
+
+// ---------------------------------------------------------------------------
+// Staff surface.
+//
+// Everything below is already served to the web console; the phone simply asks
+// for it too. Each endpoint enforces its own role check server-side, so a
+// citizen holding a token cannot reach any of it by guessing a URL — the app
+// hides these screens as a courtesy, not as the control.
+// ---------------------------------------------------------------------------
+
+export type Engineer = {
+  id: string;
+  name: string;
+  code: string;
+  phone: string | null;
+  zone: string | null;
+  status: string;
+  skills: string;
+  resolvedJobs: number;
+  complaints?: unknown[];
+  department?: { name: string } | null;
+};
+
+export type Cluster = {
+  key: string;
+  zone: string | null;
+  category: string | null;
+  civicCategory: string | null;
+  members: { ref: string; title: string; severityScore: number | null }[];
+  lat: number;
+  lng: number;
+  spreadM: number;
+  visitsSaved: number;
+  worstSeverity: number;
+  worstPriorityScore: number;
+  dueHours: number | null;
+};
+
+export type Assignment = {
+  complaint: { ref: string; title: string; category: string | null; zone: string | null };
+  engineer: { id: string; name: string; code: string; zone: string | null };
+  cost: number;
+  distanceKm: number;
+  skillMatch: boolean;
+};
+
+export type AuditLog = {
+  id: string;
+  actor: string;
+  actorRole: string;
+  action: string;
+  module: string;
+  target: string | null;
+  details: string | null;
+  createdAt: string;
+};
+
+export type AssistantReply = {
+  answer: string;
+  intent: string;
+  confidence: number;
+  source: string;
+  rows?: { ref?: string; title?: string; [k: string]: unknown }[];
+  stats?: Record<string, unknown>;
+};
+
+export async function staffComplaints(params?: { status?: string; cat?: string; q?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.cat) qs.set("cat", params.cat);
+  if (params?.q) qs.set("q", params.q);
+  const res = await fetch(`${API_URL}/api/complaints?${qs}`, { headers: await authHeaders() });
+  return ((await parse(res)).complaints ?? []) as Complaint[];
+}
+
+export async function engineers() {
+  const res = await fetch(`${API_URL}/api/engineers`, { headers: await authHeaders() });
+  return ((await parse(res)).engineers ?? []) as Engineer[];
+}
+
+export async function clusters() {
+  const res = await fetch(`${API_URL}/api/clusters`, { headers: await authHeaders() });
+  const body = await parse(res);
+  return body as {
+    radiusM: number;
+    clusters: Cluster[];
+    summary: { openComplaints: number; clusters: number; complaintsInClusters: number; visitsSaved: number };
+  };
+}
+
+export async function assignmentPlan() {
+  const res = await fetch(`${API_URL}/api/assignment`, { headers: await authHeaders() });
+  return (await parse(res)) as {
+    assignments: Assignment[];
+    unassigned: { ref: string; title: string }[];
+    totalCost: number;
+    totalDistanceKm: number;
+    naiveTotalCost: number;
+    naiveTotalDistanceKm: number;
+    costImprovementPct: number;
+  };
+}
+
+export async function applyAssignment() {
+  const res = await fetch(`${API_URL}/api/assignment/apply`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return (await parse(res)) as { applied?: number; assigned?: number };
+}
+
+export async function auditLogs() {
+  const res = await fetch(`${API_URL}/api/audit-logs`, { headers: await authHeaders() });
+  return ((await parse(res)).logs ?? []) as AuditLog[];
+}
+
+/** Move a complaint along the workflow. The server owns which moves are legal. */
+export async function transition(ref: string, to: string) {
+  const res = await fetch(`${API_URL}/api/complaints/${ref}/transition`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ to }),
+  });
+  return await parse(res);
+}
+
+export async function askAssistant(message: string) {
+  const res = await fetch(`${API_URL}/api/assistant`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  return (await parse(res)) as AssistantReply;
+}
+
+/**
+ * Which moves this role may make from this status.
+ *
+ * A copy of the server's state machine, used only to decide which buttons to
+ * draw. The server checks again and rejects anything it does not like, so a
+ * stale copy here shows a button that fails politely rather than one that
+ * quietly does the wrong thing.
+ */
+export const TRANSITIONS: Record<string, { to: string; label: string; roles: string[] }[]> = {
+  SUBMITTED: [
+    { to: "ASSIGNED", label: "Assign engineer", roles: ["SUPERVISOR", "ADMINISTRATOR"] },
+    { to: "REJECTED", label: "Reject", roles: ["SUPERVISOR", "ADMINISTRATOR"] },
+  ],
+  ASSIGNED: [
+    { to: "IN_PROGRESS", label: "Start work", roles: ["ENGINEER", "SUPERVISOR", "ADMINISTRATOR"] },
+  ],
+  IN_PROGRESS: [
+    { to: "PENDING_REVIEW", label: "Mark complete", roles: ["ENGINEER", "SUPERVISOR", "ADMINISTRATOR"] },
+  ],
+  PENDING_REVIEW: [
+    { to: "CLOSED", label: "Approve closure", roles: ["SUPERVISOR", "ADMINISTRATOR"] },
+    { to: "IN_PROGRESS", label: "Send back for rework", roles: ["SUPERVISOR", "ADMINISTRATOR"] },
+  ],
+  CLOSED: [],
+  REJECTED: [],
+};
+
+export const STAFF_ROLES = ["SUPERVISOR", "ADMINISTRATOR", "ENGINEER"];
+export const isStaff = (role?: string | null) => STAFF_ROLES.includes(String(role ?? "").toUpperCase());

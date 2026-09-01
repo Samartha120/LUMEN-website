@@ -7,11 +7,13 @@ import { complaint, mediaUrl, ComplaintDetail, Detection } from "../api";
 import { C, S, R, F, card, tone, statusLabel, ago } from "../theme";
 import { Meter, SectionTitle, StatusCard } from "../ui";
 import { Icon } from "../Icon";
+import { useT } from "../i18n";
 
 export default function DetailScreen({ refCode, onBack }: {
   refCode: string;
   onBack: () => void;
 }) {
+  const { t } = useT();
   const [c, setC] = useState<ComplaintDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(false);
@@ -41,14 +43,14 @@ export default function DetailScreen({ refCode, onBack }: {
   } catch {
     detections = [];
   }
-  const t = tone(c.priority);
+  const tn = tone(c.priority);
 
   return (
     <ScrollView contentContainerStyle={s.wrap}>
       <Pressable onPress={onBack} hitSlop={12} style={s.backRow}>
         <View style={s.backInner}>
           <Icon name="chevron-left" size={18} color={C.ink} />
-          <Text style={s.back}>My reports</Text>
+          <Text style={s.back}>{t("detail.back")}</Text>
         </View>
       </Pressable>
 
@@ -79,7 +81,7 @@ export default function DetailScreen({ refCode, onBack }: {
         >
           <Icon name="map-pin" size={13} color={C.muted} />
           <Text style={s.address}>{c.address}</Text>
-          {c.lat != null && <Text style={s.openMap}>Open in Maps</Text>}
+          {c.lat != null && <Text style={s.openMap}>{t("detail.openMaps")}</Text>}
         </Pressable>
       )}
 
@@ -100,11 +102,11 @@ export default function DetailScreen({ refCode, onBack }: {
         </Pressable>
       </Modal>
 
-      <SectionTitle>What the model found</SectionTitle>
+      <SectionTitle>{t("detail.found")}</SectionTitle>
       {detections.length === 0 ? (
         <View style={[card, s.block]}>
           <Text style={s.body}>
-            Nothing was detected in this photograph. A supervisor will triage it by hand.
+            {t("detail.nothing")}
           </Text>
         </View>
       ) : (
@@ -113,7 +115,7 @@ export default function DetailScreen({ refCode, onBack }: {
             <View key={i} style={[s.detRow, i === 0 && { borderTopWidth: 0 }]}>
               <View style={{ flex: 1 }}>
                 <Text style={s.detLabel}>{d.label}</Text>
-                <Text style={s.detKind}>{d.polygon ? "outlined" : "boxed"}</Text>
+                <Text style={s.detKind}>{d.polygon ? t("detail.outlined") : t("detail.boxed")}</Text>
               </View>
               <Text style={s.detConf}>{Math.round(d.confidence * 100)}%</Text>
             </View>
@@ -123,13 +125,13 @@ export default function DetailScreen({ refCode, onBack }: {
 
       {c.severityScore != null && (
         <>
-          <SectionTitle>Severity</SectionTitle>
+          <SectionTitle>{t("detail.severity")}</SectionTitle>
           <View style={[card, s.block]}>
             <View style={s.sevRow}>
               <Text style={s.sevNum}>{Math.round(c.severityScore)}</Text>
               <Text style={s.sevOf}>/ 100</Text>
               <View style={{ flex: 1 }} />
-              <Text style={[s.sevBand, { color: t.fg }]}>{c.priority ?? ""}</Text>
+              <Text style={[s.sevBand, { color: tn.fg }]}>{c.priority ?? ""}</Text>
             </View>
             <View style={{ marginTop: S.md }}>
               <Meter value={c.severityScore} priority={c.priority} />
@@ -138,7 +140,7 @@ export default function DetailScreen({ refCode, onBack }: {
         </>
       )}
 
-      <SectionTitle>Progress</SectionTitle>
+      <SectionTitle>{t("detail.progress")}</SectionTitle>
       <View style={s.timeline}>
         {(c.events ?? []).slice(0, 8).map((e, i, arr) => (
           <View key={e.id} style={s.event}>

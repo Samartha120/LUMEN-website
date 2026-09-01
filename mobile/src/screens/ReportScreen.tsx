@@ -10,10 +10,12 @@ import { enqueue, isOnline } from "../outbox";
 import { C, S, R, F, card, tone } from "../theme";
 import { Button, Meter } from "../ui";
 import { Icon } from "../Icon";
+import { useT } from "../i18n";
 
 const MAX_PHOTOS = 5;
 
 export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null) => void }) {
+  const { t } = useT();
   const [photos, setPhotos] = useState<string[]>([]);
   const [title, setTitle] = useState("");
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -77,8 +79,8 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
 
   async function send() {
     setError(null);
-    if (!photos.length) return setError("A photograph is required — the class and severity come from it.");
-    if (!title.trim()) return setError("Please describe what you are reporting.");
+    if (!photos.length) return setError(t("report.needPhoto"));
+    if (!title.trim()) return setError(t("report.needTitle"));
     setBusy(true);
     try {
       // Offline is not a failure. The report is written to the device and goes
@@ -105,7 +107,7 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
         Alert.alert("Reported — already known",
           `Filed as ${out.ref}. This looks like the same problem as ${out.duplicate.of}, about ${out.duplicate.distanceM} m away. Your report still counts: more reports raise its priority.`);
       } else {
-        Alert.alert("Report filed", `Your report was received as ${out.ref}.`);
+        Alert.alert(t("report.filed"), t("report.filedBody", { ref: out.ref }));
       }
       onFiled(out.ref);
     } catch (e: any) {
@@ -125,8 +127,8 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
 
   return (
     <ScrollView contentContainerStyle={s.wrap} keyboardShouldPersistTaps="handled">
-      <Text style={s.h1}>Report a problem</Text>
-      <Text style={s.sub}>The class, severity and department come from your photograph.</Text>
+      <Text style={s.h1}>{t("report.title")}</Text>
+      <Text style={s.sub}>{t("report.sub")}</Text>
 
       <View style={s.steps}>
         {[1, 2, 3].map((n) => (
@@ -134,7 +136,7 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
         ))}
       </View>
 
-      <Text style={s.legend}>Step {step} of 3 · {["Photograph", "Describe", "Submit"][step - 1]}</Text>
+      <Text style={s.legend}>{t("report.step", { n: step })} · {t((["report.step1","report.step2","report.step3"][step - 1]) as any)}</Text>
 
       {photos.length > 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.strip}
@@ -157,16 +159,16 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
           <Pressable style={({ pressed }) => [s.pick, s.pickPrimary, pressed && s.pickPressed]}
             onPress={takePhoto}>
             <Icon name="camera" size={22} color={C.brand} />
-            <Text style={s.pickTextPrimary}>{photos.length ? "Add photo" : "Take photo"}</Text>
+            <Text style={s.pickTextPrimary}>{photos.length ? t("report.add") : t("report.take")}</Text>
           </Pressable>
           <Pressable style={({ pressed }) => [s.pick, pressed && s.pickPressed]} onPress={pickPhoto}>
             <Icon name="image" size={22} color={C.body} />
-            <Text style={s.pickText}>From gallery</Text>
+            <Text style={s.pickText}>{t("report.gallery")}</Text>
           </Pressable>
         </View>
       )}
       {photos.length > 0 && (
-        <Text style={s.counter}>{photos.length} of {MAX_PHOTOS} · the first is used for classification</Text>
+        <Text style={s.counter}>{t("report.counter", { n: photos.length, max: MAX_PHOTOS })}</Text>
       )}
 
       {photos.length > 0 && (
@@ -177,7 +179,7 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
             : (
               <View style={s.checkInner}>
                 <Icon name="cpu" size={17} color={C.ink} />
-                <Text style={s.checkText}>Check what the AI sees</Text>
+                <Text style={s.checkText}>{t("report.check")}</Text>
               </View>
             )}
         </Pressable>
@@ -185,12 +187,12 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
 
       {preview && <PreviewCard preview={preview} />}
 
-      <Text style={s.label}>What is the problem?</Text>
+      <Text style={s.label}>{t("report.what")}</Text>
       <TextInput
         style={[s.input, focused && s.inputFocus]}
         value={title} onChangeText={setTitle}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-        placeholder="e.g. Deep pothole outside the school gate"
+        placeholder={t("report.placeholder")}
         placeholderTextColor={C.muted} multiline
       />
 
@@ -199,20 +201,20 @@ export default function ReportScreen({ onFiled }: { onFiled: (ref: string | null
           <Icon name="map-pin" size={17} color={coords ? C.ok : C.muted} />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={s.locTitle}>{coords ? "Location attached" : "Add your location"}</Text>
+          <Text style={s.locTitle}>{coords ? t("report.locationOn") : t("report.locationOff")}</Text>
           <Text style={s.locSub}>
             {coords
               ? `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`
-              : "Routes it to the right ward"}
+              : t("report.locationHint")}
           </Text>
         </View>
-        <Text style={s.locAction}>{locating ? "…" : coords ? "Update" : "Use GPS"}</Text>
+        <Text style={s.locAction}>{locating ? "…" : coords ? t("report.update") : t("report.useGps")}</Text>
       </Pressable>
 
       {error && <View style={s.errorBox}><Text style={s.errorText}>{error}</Text></View>}
 
-      <Button label="Submit report" onPress={send} busy={busy} style={{ marginTop: S.xl }} />
-      {busy && <Text style={s.hint}>Analysing the photograph…</Text>}
+      <Button label={t("report.submit")} onPress={send} busy={busy} style={{ marginTop: S.xl }} />
+      {busy && <Text style={s.hint}>{t("report.analysing")}</Text>}
     </ScrollView>
   );
 }

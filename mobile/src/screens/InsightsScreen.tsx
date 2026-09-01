@@ -6,6 +6,7 @@ import { myComplaints, Complaint } from "../api";
 import { C, S, R, F, card, tone, stageOf, STAGES } from "../theme";
 import { Empty, BigStat } from "../ui";
 import { Icon, IconName } from "../Icon";
+import { useT } from "../i18n";
 
 /**
  * What your reporting adds up to.
@@ -28,6 +29,7 @@ const CATEGORY_ICON: Record<string, IconName> = {
 };
 
 export default function InsightsScreen({ reloadKey }: { reloadKey: number }) {
+  const { t } = useT();
   const [items, setItems] = useState<Complaint[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,8 +93,8 @@ export default function InsightsScreen({ reloadKey }: { reloadKey: number }) {
       <ScrollView contentContainerStyle={s.emptyWrap}>
         <Empty
           icon={error ? "alert-triangle" : "bar-chart-2"}
-          title={error ? "Could not load" : "Nothing to chart yet"}
-          body={error ?? "File a report and this page will show what you have reported and how it is going."}
+          title={error ? t("common.couldNotLoad") : t("impact.emptyTitle")}
+          body={error ?? t("impact.emptyBody")}
         />
       </ScrollView>
     );
@@ -110,18 +112,18 @@ export default function InsightsScreen({ reloadKey }: { reloadKey: number }) {
         }} />
       }
     >
-      <Text style={s.h1}>Your impact</Text>
-      <Text style={s.sub}>Worked out on this phone from your own reports.</Text>
+      <Text style={s.h1}>{t("impact.title")}</Text>
+      <Text style={s.sub}>{t("impact.sub")}</Text>
 
       <View style={{ gap: S.md, marginTop: S.xl }}>
         <BigStat
           value={String(stats.total)}
           unit={stats.total === 1 ? "report" : "reports"}
-          label={`filed, ${stats.resolvedShare}% of them resolved`}
+          label={t("impact.filed", { pct: stats.resolvedShare })}
         />
       </View>
 
-      <Text style={s.section}>What you report</Text>
+      <Text style={s.section}>{t("impact.whatYouReport")}</Text>
       <View style={[card, s.block]}>
         {stats.byCategory.map(([cat, n], i) => (
           <View key={cat} style={[s.barRow, i > 0 && s.barRowNext]}>
@@ -137,9 +139,9 @@ export default function InsightsScreen({ reloadKey }: { reloadKey: number }) {
         ))}
       </View>
 
-      <Text style={s.section}>Where they have got to</Text>
+      <Text style={s.section}>{t("impact.whereTheyGot")}</Text>
       <View style={[card, s.block]}>
-        {STAGES.map((label, i) => {
+        {[t("stage.filed"), t("stage.progress"), t("stage.resolved")].map((label, i) => {
           const n = stats.byStage[i];
           const pct = stats.total ? Math.round((n / stats.total) * 100) : 0;
           return (
@@ -159,7 +161,7 @@ export default function InsightsScreen({ reloadKey }: { reloadKey: number }) {
         })}
       </View>
 
-      <Text style={s.section}>Reports per month</Text>
+      <Text style={s.section}>{t("impact.perMonth")}</Text>
       <View style={[card, s.block]}>
         <View style={s.columns}>
           {stats.months.map((m) => (
@@ -177,15 +179,15 @@ export default function InsightsScreen({ reloadKey }: { reloadKey: number }) {
         </View>
       </View>
 
-      <Text style={s.section}>Severity</Text>
+      <Text style={s.section}>{t("impact.severity")}</Text>
       <View style={[card, s.block, s.sevBlock]}>
         <View>
           <Text style={s.sevNum}>{stats.avgSeverity}</Text>
-          <Text style={s.sevLabel}>average, out of 100</Text>
+          <Text style={s.sevLabel}>{t("impact.average")}</Text>
         </View>
         <View style={s.sevRight}>
           <Text style={[s.sevNum, { color: tone("HIGH").fg }]}>{stats.urgent}</Text>
-          <Text style={s.sevLabel}>marked urgent</Text>
+          <Text style={s.sevLabel}>{t("impact.urgent")}</Text>
         </View>
       </View>
 

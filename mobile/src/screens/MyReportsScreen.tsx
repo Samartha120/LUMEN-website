@@ -7,6 +7,7 @@ import { myComplaints, Complaint } from "../api";
 import { readOutbox, flushOutbox, Queued } from "../outbox";
 import { C, S, R, F, card, tone, statusLabel, ago, stageOf, STAGES } from "../theme";
 import { Chip, Empty, StatusCard, TileRow, BigStat } from "../ui";
+import { useT } from "../i18n";
 
 const FILTERS = ["All", "Open", "Resolved"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -15,11 +16,10 @@ type Filter = (typeof FILTERS)[number];
 // have to learn the workflow's vocabulary to filter their own reports.
 const DONE = ["RESOLVED", "CLOSED", "REJECTED"];
 
-function greeting() {
+/** Which greeting applies now. The wording itself comes from the dictionary. */
+function greetingKey() {
   const h = new Date().getHours();
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  return "Good evening";
+  return h < 12 ? "home.morning" : h < 17 ? "home.afternoon" : "home.evening";
 }
 
 export default function MyReportsScreen({ onOpen, reloadKey, name }: {
@@ -27,6 +27,7 @@ export default function MyReportsScreen({ onOpen, reloadKey, name }: {
   reloadKey: number;
   name?: string;
 }) {
+  const { t } = useT();
   const [items, setItems] = useState<Complaint[] | null>(null);
   const [queued, setQueued] = useState<Queued[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -97,12 +98,12 @@ export default function MyReportsScreen({ onOpen, reloadKey, name }: {
             {/* The yellow disc sits behind the greeting, as in the reference:
                 one spot of colour to anchor the page, carrying no information. */}
             <View style={s.blob} />
-            <Text style={s.hello}>{greeting()}, {(name ?? "there").split(" ")[0]}</Text>
+            <Text style={s.hello}>{t(greetingKey() as any)}, {(name ?? "there").split(" ")[0]}</Text>
             <Text style={s.today}>{new Date().toLocaleDateString(undefined, {
               weekday: "long", month: "long", day: "numeric",
             })}</Text>
 
-            <Text style={s.section}>Latest report</Text>
+            <Text style={s.section}>{t("home.latest")}</Text>
             <StatusCard
               ref_={items[0].ref}
               title={items[0].title}
@@ -111,41 +112,41 @@ export default function MyReportsScreen({ onOpen, reloadKey, name }: {
               onPress={() => onOpen(items[0].ref)}
             />
 
-            <Text style={s.section}>At a glance</Text>
+            <Text style={s.section}>{t("home.glance")}</Text>
             <View style={{ gap: S.md }}>
               <BigStat
                 value={String(items.length - resolved)}
                 unit={items.length - resolved === 1 ? "open" : "open"}
-                label={`of your ${items.length} report${items.length === 1 ? "" : "s"} still being worked on`}
+                label={t("home.stillOpen", { total: items.length })}
               />
               <TileRow
                 icon="check-circle" tint="brand"
-                title="Resolved for you"
+                title={t("home.resolvedForYou")}
                 value={`${resolved} report${resolved === 1 ? "" : "s"}`}
               />
               {queued.length > 0 ? (
                 <TileRow
                   icon="wifi-off" tint="coral"
-                  title="Waiting to send — saved on this phone"
+                  title={t("home.waitingToSend")}
                   value={`${queued.length} report${queued.length === 1 ? "" : "s"}`}
                 />
               ) : (
                 <TileRow
                   icon="alert-triangle" tint="accent"
-                  title="Marked urgent by the detector"
+                  title={t("home.markedUrgent")}
                   value={`${urgent} report${urgent === 1 ? "" : "s"}`}
                 />
               )}
             </View>
 
-            <Text style={s.section}>All reports</Text>
+            <Text style={s.section}>{t("home.all")}</Text>
             <TextInput style={s.search} value={q} onChangeText={setQ}
-              placeholder="Search your reports" placeholderTextColor={C.muted}
+              placeholder={t("home.search")} placeholderTextColor={C.muted}
               autoCorrect={false} />
 
             <View style={s.filters}>
               {FILTERS.map((f) => (
-                <Chip key={f} label={f} selected={filter === f} onPress={() => setFilter(f)} />
+                <Chip key={f} label={t(("home.filter" + f) as any)} selected={filter === f} onPress={() => setFilter(f)} />
               ))}
             </View>
           </View>
@@ -154,12 +155,12 @@ export default function MyReportsScreen({ onOpen, reloadKey, name }: {
       ListEmptyComponent={
         <Empty
           icon={error ? "alert-triangle" : items.length ? "search" : "camera"}
-          title={error ? "Could not load" : items.length ? "Nothing matches" : "No reports yet"}
+          title={error ? t("common.couldNotLoad") : items.length ? t("home.noMatchTitle") : t("home.emptyTitle")}
           body={
             error ??
             (items.length
-              ? "Try a different search, or clear the filter."
-              : "Photograph a pothole, a garbage pile or an open manhole and it will appear here.")
+              ? t("home.noMatchBody")
+              : t("home.emptyBody"))
           }
         />
       }

@@ -6,6 +6,7 @@ import { notifications, markNotificationsRead, Notification } from "../api";
 import { C, S, R, F, card, statusLabel, ago } from "../theme";
 import { Empty } from "../ui";
 import { Icon, IconName } from "../Icon";
+import { useT } from "../i18n";
 
 /** An icon and a colour for each kind of update, so the list scans at a glance. */
 function look(type: string): { icon: IconName; tint: string; onTint: string } {
@@ -30,6 +31,7 @@ export default function AlertsScreen({ onOpen, onRead }: {
   onOpen: (ref: string) => void;
   onRead: () => void;
 }) {
+  const { t } = useT();
   const [items, setItems] = useState<Notification[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -66,15 +68,15 @@ export default function AlertsScreen({ onOpen, onRead }: {
         items.length ? (
           <View style={s.head}>
             <View>
-              <Text style={s.h1}>Updates</Text>
+              <Text style={s.h1}>{t("alerts.title")}</Text>
               <Text style={s.sub}>
-                {unread ? `${unread} unread` : "All caught up"}
+                {unread ? t("alerts.unread", { n: unread }) : t("alerts.caughtUp")}
               </Text>
             </View>
             {unread > 0 && (
               <Pressable hitSlop={8}
                 onPress={async () => { await markNotificationsRead(); await load(); onRead(); }}>
-                <Text style={s.readAll}>Mark all read</Text>
+                <Text style={s.readAll}>{t("alerts.markAll")}</Text>
               </Pressable>
             )}
           </View>
@@ -83,8 +85,8 @@ export default function AlertsScreen({ onOpen, onRead }: {
       ListEmptyComponent={
         <Empty
           icon={error ? "alert-triangle" : "bell"}
-          title={error ? "Could not load" : "No updates yet"}
-          body={error ?? "When a department picks up or resolves one of your reports, it appears here."}
+          title={error ? t("common.couldNotLoad") : t("alerts.emptyTitle")}
+          body={error ?? t("alerts.emptyBody")}
         />
       }
       renderItem={({ item }) => {

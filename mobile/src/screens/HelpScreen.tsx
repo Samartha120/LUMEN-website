@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { C, S, R, F, card } from "../theme";
 import { Icon } from "../Icon";
+import { useT } from "../i18n";
 
 /**
  * Answers to the questions this app actually raises.
@@ -47,6 +48,7 @@ const FAQ: { q: string; a: string }[] = [
 ];
 
 export default function HelpScreen({ onBack }: { onBack: () => void }) {
+  const { t } = useT();
   const [open, setOpen] = useState<number | null>(0);
 
   return (
@@ -56,8 +58,8 @@ export default function HelpScreen({ onBack }: { onBack: () => void }) {
         <Text style={s.back}>Profile</Text>
       </Pressable>
 
-      <Text style={s.h1}>How reporting works</Text>
-      <Text style={s.sub}>Eight things worth knowing before you file.</Text>
+      <Text style={s.h1}>{t("help.title")}</Text>
+      <Text style={s.sub}>{t("help.sub")}</Text>
 
       <View style={{ marginTop: S.xl, gap: S.md }}>
         {FAQ.map((item, i) => {

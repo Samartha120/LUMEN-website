@@ -4,28 +4,18 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { C, S, R, F } from "../theme";
 import { Button } from "../ui";
 import { Icon, IconName } from "../Icon";
+import { useT } from "../i18n";
 
 export const SEEN_KEY = "lumen_onboarded";
 
-const SLIDES: { icon: IconName; tint: string; title: string; body: string }[] = [
-  {
-    icon: "camera", tint: C.brand,
-    title: "Photograph the damage",
-    body: "A pothole, a garbage pile, an open manhole. One picture is all a report needs — you do not have to pick a category or a department.",
-  },
-  {
-    icon: "cpu", tint: C.accent,
-    title: "See what the model sees",
-    body: "The detector outlines the damage and scores how serious it is, before you file. If the photo is not good enough, you will know while you are still standing there.",
-  },
-  {
-    icon: "activity", tint: C.sky,
-    title: "Follow it to Resolved",
-    body: "Your report is routed to the right department automatically. You will see it move from Filed to In progress to Resolved, and hear about it each time.",
-  },
+const SLIDES: { icon: IconName; tint: string; key: string }[] = [
+  { icon: "camera", tint: C.brand, key: "onboard.1" },
+  { icon: "cpu", tint: C.accent, key: "onboard.2" },
+  { icon: "activity", tint: C.sky, key: "onboard.3" },
 ];
 
 export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
+  const { t } = useT();
   const [i, setI] = useState(0);
   const slide = SLIDES[i];
   const last = i === SLIDES.length - 1;
@@ -38,15 +28,15 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
   return (
     <View style={s.wrap}>
       <Pressable onPress={finish} hitSlop={10} style={s.skipWrap}>
-        <Text style={s.skip}>{last ? "" : "Skip"}</Text>
+        <Text style={s.skip}>{last ? "" : t("onboard.skip")}</Text>
       </Pressable>
 
       <View style={s.middle}>
         <View style={[s.disc, { backgroundColor: slide.tint }]}>
           <Icon name={slide.icon} size={40} color={slide.tint === C.brand ? C.ink : "#fff"} />
         </View>
-        <Text style={s.title}>{slide.title}</Text>
-        <Text style={s.body}>{slide.body}</Text>
+        <Text style={s.title}>{t(`${slide.key}.title` as any)}</Text>
+        <Text style={s.body}>{t(`${slide.key}.body` as any)}</Text>
       </View>
 
       <View style={s.dots}>
@@ -56,7 +46,7 @@ export default function OnboardingScreen({ onDone }: { onDone: () => void }) {
       </View>
 
       <Button
-        label={last ? "Get started" : "Next"}
+        label={last ? t("onboard.start") : t("onboard.next")}
         onPress={() => (last ? finish() : setI(i + 1))}
       />
     </View>

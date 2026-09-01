@@ -6,8 +6,10 @@ import {
 import { login, register, API_URL } from "../api";
 import { C, S, R, F, E } from "../theme";
 import { Button } from "../ui";
+import { useT } from "../i18n";
 
 export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => void }) {
+  const { t } = useT();
   const [mode, setMode] = useState<"in" | "up">("in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -20,8 +22,8 @@ export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => vo
 
   async function go() {
     setError(null);
-    if (!email.trim() || !password) return setError("Email and password are required.");
-    if (signUp && !name.trim()) return setError("Please enter your name.");
+    if (!email.trim() || !password) return setError(t("auth.needBoth"));
+    if (signUp && !name.trim()) return setError(t("auth.needName"));
     setBusy(true);
     try {
       const user = signUp
@@ -34,7 +36,7 @@ export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => vo
       setError(
         e?.message === "Network request failed"
           ? `Cannot reach the server at ${API_URL}. Check EXPO_PUBLIC_API_URL and that the phone is on the same network.`
-          : e?.message ?? "Sign-in failed.",
+          : e?.message ?? t("auth.failed"),
       );
     } finally {
       setBusy(false);
@@ -49,31 +51,31 @@ export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => vo
         <View style={s.brand}>
           <View style={s.mark}><Text style={s.markText}>L</Text></View>
           <Text style={s.logo}>LUMEN</Text>
-          <Text style={s.tag}>Report civic damage in your city</Text>
+          <Text style={s.tag}>{t("auth.tagline")}</Text>
         </View>
 
         <View style={s.card}>
-          <Text style={s.h1}>{signUp ? "Create an account" : "Welcome back"}</Text>
+          <Text style={s.h1}>{signUp ? t("auth.create") : t("auth.welcome")}</Text>
           <Text style={s.h2}>
-            {signUp ? "Takes a moment. You only need an email." : "Sign in to file and follow your reports."}
+            {signUp ? t("auth.createSub") : t("auth.welcomeSub")}
           </Text>
 
           {signUp && (
             <>
-              <Text style={s.label}>Name</Text>
+              <Text style={s.label}>{t("auth.name")}</Text>
               <TextInput style={field("name")} value={name} onChangeText={setName}
                 onFocus={() => setFocus("name")} onBlur={() => setFocus(null)}
-                placeholder="Your name" autoCapitalize="words" placeholderTextColor={C.muted} />
+                placeholder={t("auth.namePlaceholder")} autoCapitalize="words" placeholderTextColor={C.muted} />
             </>
           )}
 
-          <Text style={s.label}>Email</Text>
+          <Text style={s.label}>{t("auth.email")}</Text>
           <TextInput style={field("email")} value={email} onChangeText={setEmail}
             onFocus={() => setFocus("email")} onBlur={() => setFocus(null)}
             placeholder="you@example.com" autoCapitalize="none" keyboardType="email-address"
             autoCorrect={false} placeholderTextColor={C.muted} />
 
-          <Text style={s.label}>Password</Text>
+          <Text style={s.label}>{t("auth.password")}</Text>
           <TextInput style={field("password")} value={password} onChangeText={setPassword}
             onFocus={() => setFocus("password")} onBlur={() => setFocus(null)}
             placeholder="••••••••" secureTextEntry placeholderTextColor={C.muted} />
@@ -84,13 +86,13 @@ export default function LoginScreen({ onSignedIn }: { onSignedIn: (u: any) => vo
             </View>
           )}
 
-          <Button label={signUp ? "Create account" : "Sign in"} onPress={go} busy={busy}
+          <Button label={signUp ? t("auth.create") : t("auth.signIn")} onPress={go} busy={busy}
             style={{ marginTop: S.xl }} />
 
           <Pressable onPress={() => { setMode(signUp ? "in" : "up"); setError(null); }} hitSlop={8}>
             <Text style={s.switch}>
-              {signUp ? "Already registered?  " : "New here?  "}
-              <Text style={s.switchStrong}>{signUp ? "Sign in" : "Create an account"}</Text>
+              {signUp ? t("auth.already") + "  " : t("auth.newHere") + "  "}
+              <Text style={s.switchStrong}>{signUp ? t("auth.signIn") : t("auth.create")}</Text>
             </Text>
           </Pressable>
         </View>

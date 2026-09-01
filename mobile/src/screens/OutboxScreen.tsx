@@ -6,6 +6,7 @@ import { readOutbox, removeQueued, flushOutbox, isOnline, Queued } from "../outb
 import { C, S, R, F, card, ago } from "../theme";
 import { Button, Empty } from "../ui";
 import { Icon } from "../Icon";
+import { useT } from "../i18n";
 
 /**
  * The reports this phone is holding.
@@ -19,6 +20,7 @@ export default function OutboxScreen({ onBack, onSent }: {
   onBack: () => void;
   onSent: () => void;
 }) {
+  const { t } = useT();
   const [items, setItems] = useState<Queued[] | null>(null);
   const [sending, setSending] = useState(false);
   const [online, setOnline] = useState(true);
@@ -59,7 +61,7 @@ export default function OutboxScreen({ onBack, onSent }: {
         <Text style={s.back}>Profile</Text>
       </Pressable>
 
-      <Text style={s.h1}>Waiting to send</Text>
+      <Text style={s.h1}>{t("outbox.title")}</Text>
       <Text style={s.sub}>
         {items.length
           ? `${items.length} report${items.length === 1 ? "" : "s"} saved on this phone${online ? "" : " · you are offline"}`
@@ -69,8 +71,8 @@ export default function OutboxScreen({ onBack, onSent }: {
       {items.length === 0 ? (
         <Empty
           icon="check-circle"
-          title="All sent"
-          body="Anything filed without a signal is kept here until it can be delivered."
+          title={t("outbox.allSentTitle")}
+          body={t("outbox.allSentBody")}
         />
       ) : (
         <>
@@ -107,13 +109,13 @@ export default function OutboxScreen({ onBack, onSent }: {
                     },
                   ])}
               >
-                <Text style={s.discard}>Discard</Text>
+                <Text style={s.discard}>{t("outbox.discard")}</Text>
               </Pressable>
             </View>
           ))}
 
           <Button
-            label={online ? "Send now" : "Try anyway"}
+            label={online ? t("outbox.sendNow") : t("outbox.tryAnyway")}
             onPress={sendNow} busy={sending} style={{ marginTop: S.lg }}
           />
         </>

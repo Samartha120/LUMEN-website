@@ -3,6 +3,7 @@ import {
   ActivityIndicator, Pressable, StyleSheet, Text, View, ViewStyle,
 } from "react-native";
 import { C, S, R, F, E, card, tone, STAGES, stageOf } from "./theme";
+import { useT } from "./i18n";
 import { Icon, IconName } from "./Icon";
 
 /**
@@ -180,6 +181,8 @@ export function StatusCard({ ref_, title, status, priority, onPress }: {
 
 /** Filed → In progress → Resolved, drawn on the dark card. */
 export function Tracker({ stage }: { stage: number }) {
+  const { t } = useT();
+  const labels = [t("stage.filed"), t("stage.progress"), t("stage.resolved")];
   return (
     <View style={u.tracker}>
       <View style={u.trackRail}>
@@ -193,7 +196,7 @@ export function Tracker({ stage }: { stage: number }) {
         ))}
       </View>
       <View style={u.trackLabels}>
-        {STAGES.map((label, i) => (
+        {labels.map((label, i) => (
           <Text key={label} style={[
             u.trackLabel,
             i === 0 && { textAlign: "left" },

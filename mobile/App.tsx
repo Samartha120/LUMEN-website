@@ -23,6 +23,7 @@ import TriageScreen from "./src/screens/staff/TriageScreen";
 import OpsScreen from "./src/screens/staff/OpsScreen";
 import AssistantScreen from "./src/screens/staff/AssistantScreen";
 import { C, S } from "./src/theme";
+import { I18nProvider, useT } from "./src/i18n";
 import { Icon, IconName } from "./src/Icon";
 
 type Tab =
@@ -41,6 +42,15 @@ type Sheet = { kind: "detail"; ref: string } | { kind: "outbox" } | { kind: "hel
  * checks the role itself, so hiding the tabs is a courtesy, not the control.
  */
 export default function App() {
+  return (
+    <I18nProvider>
+      <Shell />
+    </I18nProvider>
+  );
+}
+
+function Shell() {
+  const { t } = useT();
   const [user, setUser] = useState<any>(null);
   const [checking, setChecking] = useState(true);
   const [onboarded, setOnboarded] = useState(true);
@@ -204,14 +214,14 @@ export default function App() {
 
               <TabButton icon="message-circle" label="Ask" on={tab === "assistant"}
                 onPress={() => setTab("assistant")} />
-              <TabButton icon="user" label="Profile" on={tab === "profile"}
+              <TabButton icon="user" label={t("tab.profile")} on={tab === "profile"}
                 onPress={() => setTab("profile")} />
             </>
           ) : (
             <>
-              <TabButton icon="home" label="Home" on={tab === "home"}
+              <TabButton icon="home" label={t("tab.home")} on={tab === "home"}
                 onPress={() => { setTab("home"); setReloadKey((k) => k + 1); }} />
-              <TabButton icon="bar-chart-2" label="Impact" on={tab === "insights"}
+              <TabButton icon="bar-chart-2" label={t("tab.impact")} on={tab === "insights"}
                 onPress={() => { setTab("insights"); setReloadKey((k) => k + 1); }} />
 
               {/* Reporting is the reason the app exists, so it is not a tab
@@ -223,9 +233,9 @@ export default function App() {
                 <Icon name="camera" size={23} color={C.brand} />
               </Pressable>
 
-              <TabButton icon="bell" label="Updates" on={tab === "alerts"} badge={unread}
+              <TabButton icon="bell" label={t("tab.updates")} on={tab === "alerts"} badge={unread}
                 onPress={() => { setTab("alerts"); setReloadKey((k) => k + 1); }} />
-              <TabButton icon="user" label="Profile" on={tab === "profile"}
+              <TabButton icon="user" label={t("tab.profile")} on={tab === "profile"}
                 onPress={() => setTab("profile")} />
             </>
           )}

@@ -9,6 +9,7 @@ import { readOutbox } from "../outbox";
 import { C, S, R, F, card } from "../theme";
 import { Button } from "../ui";
 import { Icon, IconName } from "../Icon";
+import { useT, LANGUAGES, Lang } from "../i18n";
 
 export const LOCK_KEY = "lumen_lock";
 
@@ -18,6 +19,7 @@ export default function ProfileScreen({ user, onSignOut, onOpenOutbox, onOpenHel
   onOpenOutbox: () => void;
   onOpenHelp: () => void;
 }) {
+  const { t, lang, setLang } = useT();
   const [lock, setLock] = useState(false);
   const [canLock, setCanLock] = useState(false);
   const [queued, setQueued] = useState(0);
@@ -61,26 +63,42 @@ export default function ProfileScreen({ user, onSignOut, onOpenOutbox, onOpenHel
         <Text style={s.roleText}>{String(user?.role ?? "CITIZEN").replace("_", " ")}</Text>
       </View>
 
-      <Text style={s.section}>Your reports</Text>
+      <Text style={s.section}>{t("profile.yourReports")}</Text>
       <View style={[card, s.group]}>
-        <Row icon="upload-cloud" label="Waiting to send"
-          value={queued ? `${queued} report${queued === 1 ? "" : "s"}` : "None"}
+        <Row icon="upload-cloud" label={t("profile.waiting")}
+          value={queued ? String(queued) : t("profile.none")}
           onPress={onOpenOutbox} />
-        <Row icon="help-circle" label="How reporting works" onPress={onOpenHelp} last />
+        <Row icon="help-circle" label={t("profile.howItWorks")} onPress={onOpenHelp} last />
       </View>
 
-      <Text style={s.section}>Security</Text>
+      {/* Chosen here rather than buried in a system menu. A resident who reads
+          Kannada should not have to navigate English to say so. */}
+      <Text style={s.section}>{t("profile.language")}</Text>
+      <View style={[card, s.group, s.langGroup]}>
+        {(Object.keys(LANGUAGES) as Lang[]).map((code) => {
+          const on = lang === code;
+          return (
+            <Pressable key={code} onPress={() => setLang(code)}
+              style={[s.lang, on && s.langOn]}>
+              <Text style={[s.langText, on && s.langTextOn]}>{LANGUAGES[code]}</Text>
+              {on && <Icon name="check" size={15} color={C.ink} />}
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <Text style={s.section}>{t("profile.security")}</Text>
       <View style={[card, s.group]}>
         <View style={[s.row, s.rowLast]}>
           <View style={[s.rowIcon, { backgroundColor: C.brandSoft }]}>
             <Icon name="lock" size={17} color={C.ink} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={s.rowLabel}>Lock the app</Text>
+            <Text style={s.rowLabel}>{t("profile.lock")}</Text>
             <Text style={s.rowSub}>
               {canLock
-                ? "Ask for your fingerprint or face when the app opens"
-                : "No fingerprint or face is set up on this phone"}
+                ? t("profile.lockOn")
+                : t("profile.lockNone")}
             </Text>
           </View>
           <Switch
@@ -91,34 +109,32 @@ export default function ProfileScreen({ user, onSignOut, onOpenOutbox, onOpenHel
         </View>
       </View>
 
-      <Text style={s.section}>About</Text>
+      <Text style={s.section}>{t("profile.about")}</Text>
       <View style={[card, s.group]}>
-        <Row icon="server" label="Connected to" value={API_URL.replace(/^https?:\/\//, "")} />
-        <Row icon="cpu" label="Detection" value="YOLO11 · on the server" />
-        <Row icon="info" label="Version" value="1.0.0" last />
+        <Row icon="server" label={t("profile.connectedTo")} value={API_URL.replace(/^https?:\/\//, "")} />
+        <Row icon="cpu" label={t("profile.detection")} value="YOLO11 · on the server" />
+        <Row icon="info" label={t("profile.version")} value="1.0.0" last />
       </View>
 
-      <Text style={s.section}>Privacy</Text>
+      <Text style={s.section}>{t("profile.privacy")}</Text>
       <View style={[card, s.group]}>
         <View style={[s.row, s.rowLast]}>
           <View style={[s.rowIcon, { backgroundColor: C.skySoft }]}>
             <Icon name="eye" size={17} color={C.ink} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={s.rowLabel}>What this app can see</Text>
+            <Text style={s.rowLabel}>{t("profile.canSee")}</Text>
             <Text style={s.rowSub}>
-              Only the reports you filed. The scope is enforced in the database
-              query on the server, not filtered on this phone, so another
-              resident's complaint never leaves it.
+              {t("profile.canSeeBody")}
             </Text>
           </View>
         </View>
       </View>
 
-      <Button label="Sign out" variant="secondary" style={{ marginTop: S.xxl }}
-        onPress={() => Alert.alert("Sign out?", "You will need to sign in again to file a report.", [
-          { text: "Cancel", style: "cancel" },
-          { text: "Sign out", style: "destructive", onPress: onSignOut },
+      <Button label={t("profile.signOut")} variant="secondary" style={{ marginTop: S.xxl }}
+        onPress={() => Alert.alert(t("profile.signOut"), t("profile.signOutConfirm"), [
+          { text: t("common.cancel"), style: "cancel" },
+          { text: t("profile.signOut"), style: "destructive", onPress: onSignOut },
         ])} />
 
       <Pressable onPress={() => Linking.openURL("http://localhost:5173").catch(() => {})}>
@@ -175,6 +191,15 @@ const s = StyleSheet.create({
   rowLabel: { ...F.bodyStrong, flex: 1 },
   rowSub: { ...F.caption, fontSize: 12, marginTop: 2, lineHeight: 17 },
   rowValue: { ...F.caption, maxWidth: "45%", textAlign: "right" },
+
+  langGroup: { flexDirection: "row", padding: S.xs, gap: S.xs },
+  lang: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 6, paddingVertical: S.md, borderRadius: R.md,
+  },
+  langOn: { backgroundColor: C.brand },
+  langText: { ...F.bodyStrong, color: C.body, fontSize: 14 },
+  langTextOn: { color: C.ink, fontWeight: "800" },
 
   foot: { ...F.caption, fontSize: 11, textAlign: "center", marginTop: S.xl },
 });

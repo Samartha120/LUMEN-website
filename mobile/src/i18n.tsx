@@ -2,47 +2,46 @@ import { createContext, useCallback, useContext, useEffect, useState, ReactNode 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Localization from "expo-localization";
 
-/**
- * Three languages, no library.
- *
- * A civic app for an Indian city that only speaks English excludes most of the
- * people who trip over the manhole. The three here cover the demonstration
- * city; adding a fourth is one more object in DICT, and the type system will
- * name every string that is missing from it.
- *
- * i18next and its react bindings would be about 60 kB of dependency to look a
- * string up in an object. What they buy — plurals, interpolation, namespaces,
- * lazy loading — is worth having in an app with thousands of strings. This one
- * has a hundred and forty.
- */
-
 export const LANGUAGES = {
   en: "English",
   hi: "हिन्दी",
   kn: "ಕನ್ನಡ",
+  ta: "தமிழ்",
+  te: "తెలుగు",
+  es: "Español",
+  fr: "Français",
+  de: "Deutsch",
 } as const;
 
 export type Lang = keyof typeof LANGUAGES;
 
 const en = {
-  // --- shell
+  // --- shell & tabs
   "app.name": "LUMEN",
   "tab.home": "Home",
+  "tab.feed": "Community",
+  "tab.map": "Heatmap",
+  "tab.tracking": "Live Status",
+  "tab.voice": "Voice Report",
+  "tab.sos": "Emergency",
+  "tab.leaderboard": "Civic Karma",
   "tab.impact": "Impact",
   "tab.updates": "Updates",
   "tab.profile": "Profile",
   "tab.queue": "Queue",
   "tab.ops": "Ops",
   "tab.ask": "Ask",
+  "tab.measure": "Measure",
+  "tab.verify": "Verify",
 
-  // --- sign in
-  "auth.tagline": "Report civic damage in your city",
+  // --- sign in & auth
+  "auth.tagline": "Report civic damage & monitor city repairs in real time",
   "auth.welcome": "Welcome back",
-  "auth.welcomeSub": "Sign in to file and follow your reports.",
+  "auth.welcomeSub": "Sign in to file, discuss, and track civic issues.",
   "auth.create": "Create an account",
   "auth.createSub": "Takes a moment. You only need an email.",
   "auth.name": "Name",
-  "auth.namePlaceholder": "Your name",
+  "auth.namePlaceholder": "Your full name",
   "auth.email": "Email",
   "auth.password": "Password",
   "auth.signIn": "Sign in",
@@ -58,11 +57,11 @@ const en = {
   "onboard.next": "Next",
   "onboard.start": "Get started",
   "onboard.1.title": "Photograph the damage",
-  "onboard.1.body": "A pothole, a garbage pile, an open manhole. One picture is all a report needs — you do not have to pick a category or a department.",
-  "onboard.2.title": "See what the model sees",
-  "onboard.2.body": "The detector outlines the damage and scores how serious it is, before you file. If the photo is not good enough, you will know while you are still standing there.",
-  "onboard.3.title": "Follow it to Resolved",
-  "onboard.3.body": "Your report is routed to the right department automatically. You will see it move from Filed to In progress to Resolved, and hear about it each time.",
+  "onboard.1.body": "A pothole, a garbage pile, an open manhole. One picture is all a report needs — you do not have to pick a category or department.",
+  "onboard.2.title": "AI Computer Vision Detection",
+  "onboard.2.body": "The detector outlines the damage and calculates its severity before you file. You see what the city engineer sees in real time.",
+  "onboard.3.title": "Track to Verified Closure",
+  "onboard.3.body": "Your report is auto-routed to the right department. Follow live dispatch, crew arrival, before/after photos, and earn Civic Karma points.",
 
   // --- home
   "home.morning": "Good morning",
@@ -73,20 +72,20 @@ const en = {
   "home.all": "All reports",
   "home.stillOpen": "of your {total} reports still being worked on",
   "home.resolvedForYou": "Resolved for you",
-  "home.waitingToSend": "Waiting to send — saved on this phone",
-  "home.markedUrgent": "Marked urgent by the detector",
-  "home.search": "Search your reports",
+  "home.waitingToSend": "Waiting to send — saved offline on phone",
+  "home.markedUrgent": "Marked urgent by AI detector",
+  "home.search": "Search your reports & tickets",
   "home.filterAll": "All",
   "home.filterOpen": "Open",
   "home.filterResolved": "Resolved",
   "home.emptyTitle": "No reports yet",
-  "home.emptyBody": "Photograph a pothole, a garbage pile or an open manhole and it will appear here.",
+  "home.emptyBody": "Photograph a pothole, a garbage pile, or an open manhole and it will appear here.",
   "home.noMatchTitle": "Nothing matches",
   "home.noMatchBody": "Try a different search, or clear the filter.",
 
-  // --- report
-  "report.title": "Report a problem",
-  "report.sub": "The class, severity and department come from your photograph.",
+  // --- report & multimodal
+  "report.title": "Report Civic Problem",
+  "report.sub": "The class, severity, and department come directly from your photograph.",
   "report.step": "Step {n} of 3",
   "report.step1": "Photograph",
   "report.step2": "Describe",
@@ -94,38 +93,36 @@ const en = {
   "report.take": "Take photo",
   "report.add": "Add photo",
   "report.gallery": "From gallery",
-  "report.counter": "{n} of {max} · the first is used for classification",
-  "report.check": "Check what the AI sees",
+  "report.counter": "{n} of {max} · first photo is used for AI classification",
+  "report.check": "Inspect AI detection",
   "report.what": "What is the problem?",
-  "report.placeholder": "e.g. Deep pothole outside the school gate",
+  "report.placeholder": "e.g. Deep 15cm pothole near the school crossroad",
   "report.locationOn": "Location attached",
   "report.locationOff": "Add your location",
-  "report.locationHint": "Routes it to the right ward",
-  "report.useGps": "Use GPS",
+  "report.locationHint": "Routes it automatically to the right ward",
+  "report.useGps": "Use GPS coordinates",
   "report.update": "Update",
-  "report.submit": "Submit report",
-  "report.analysing": "Analysing the photograph…",
-  "report.needPhoto": "A photograph is required — the class and severity come from it.",
+  "report.submit": "Submit Report",
+  "report.analysing": "Analysing photograph with AI...",
+  "report.needPhoto": "A photograph is required — class and severity are extracted from it.",
   "report.needTitle": "Please describe what you are reporting.",
-  "report.filed": "Report filed",
+  "report.filed": "Report filed successfully",
   "report.filedBody": "Your report was received as {ref}.",
-  "report.savedOffline": "Saved — you are offline",
-  "report.dupTitle": "Reported — already known",
+  "report.savedOffline": "Saved locally — you are currently offline",
+  "report.dupTitle": "Reported — already tracked in system",
 
-  // --- ai preview
-  "preview.notCivic": "Not a road or civic area",
+  // --- ai preview & detail
+  "preview.notCivic": "Not a road or civic hazard",
   "preview.nothing": "Nothing detected",
-  "preview.nothingBody": "Move closer, or let the damage fill more of the frame. You can still file it — a supervisor will triage it by hand.",
-  "preview.found": "{n} region(s) found",
+  "preview.nothingBody": "Move closer, or let the damage fill more of the frame. A supervisor will triage manually.",
+  "preview.found": "{n} hazard region(s) detected",
   "preview.severity": "Severity {n} / 100",
   "preview.notFiled": "Nothing has been filed yet.",
-
-  // --- detail
   "detail.back": "My reports",
-  "detail.found": "What the model found",
-  "detail.nothing": "Nothing was detected in this photograph. A supervisor will triage it by hand.",
-  "detail.severity": "Severity",
-  "detail.progress": "Progress",
+  "detail.found": "What the AI model found",
+  "detail.nothing": "Nothing detected in photograph. A supervisor will triage manually.",
+  "detail.severity": "Severity Score",
+  "detail.progress": "Dispatch & Repair Progress",
   "detail.openMaps": "Open in Maps",
   "detail.outlined": "outlined",
   "detail.boxed": "boxed",
@@ -135,13 +132,20 @@ const en = {
   "stage.progress": "In progress",
   "stage.resolved": "Resolved",
 
-  // --- updates
-  "alerts.title": "Updates",
-  "alerts.unread": "{n} unread",
+  // --- updates & notifications
+  "alerts.title": "Updates & Notifications",
+  "alerts.unread": "{n} unread alerts",
   "alerts.caughtUp": "All caught up",
-  "alerts.markAll": "Mark all read",
+  "alerts.markAll": "Mark all as read",
   "alerts.emptyTitle": "No updates yet",
-  "alerts.emptyBody": "When a department picks up or resolves one of your reports, it appears here.",
+  "alerts.emptyBody": "When an engineer is dispatched or resolves your report, you will be notified here.",
+
+  // --- community & karma
+  "feed.title": "Neighborhood Community Feed",
+  "karma.title": "Civic Karma & Achievements",
+  "tracking.title": "Live Status Tracking",
+  "sos.title": "Emergency Hazards",
+  "heatmap.title": "City Hazard Heatmap",
 
   // --- impact
   "impact.title": "Your impact",
@@ -153,7 +157,6 @@ const en = {
   "impact.severity": "Severity",
   "impact.average": "average, out of 100",
   "impact.urgent": "marked urgent",
-  "impact.foot": "These are your reports only. City-wide figures belong to the supervisor console, not to a resident's phone.",
   "impact.emptyTitle": "Nothing to chart yet",
   "impact.emptyBody": "File a report and this page will show what you have reported and how it is going.",
 
@@ -179,9 +182,6 @@ const en = {
 
   // --- outbox
   "outbox.title": "Waiting to send",
-  "outbox.count": "{n} report(s) saved on this phone",
-  "outbox.offline": "you are offline",
-  "outbox.nothing": "Nothing is waiting",
   "outbox.allSentTitle": "All sent",
   "outbox.allSentBody": "Anything filed without a signal is kept here until it can be delivered.",
   "outbox.sendNow": "Send now",
@@ -195,241 +195,193 @@ const en = {
   // --- shared
   "common.cancel": "Cancel",
   "common.keep": "Keep",
-  "common.couldNotLoad": "Could not load",
+  "common.couldNotLoad": "Could not load data",
   "common.retry": "Try again",
+  "common.save": "Save",
+  "common.delete": "Delete",
 };
 
 type Key = keyof typeof en;
 
-// Hindi and Kannada. Written out rather than machine-translated at runtime:
-// a civic instruction that is subtly wrong is worse than one in English.
 const hi: Record<Key, string> = {
   ...en,
-  "auth.tagline": "अपने शहर की नागरिक क्षति की रिपोर्ट करें",
+  "tab.home": "होम",
+  "tab.feed": "समुदाय",
+  "tab.map": "हीटमैप",
+  "tab.tracking": "लाइव स्थिति",
+  "tab.voice": "आवाज़ रिपोर्ट",
+  "tab.sos": "आपातकालीन",
+  "tab.leaderboard": "नागरिक कर्मा",
+  "tab.updates": "सूचनाएँ",
+  "tab.profile": "प्रोफ़ाइल",
+  "auth.tagline": "अपने शहर की नागरिक समस्याओं की रिपोर्ट करें और लाइव स्थिति देखें",
   "auth.welcome": "वापसी पर स्वागत है",
   "auth.welcomeSub": "अपनी रिपोर्ट दर्ज करने और देखने के लिए साइन इन करें।",
   "auth.create": "खाता बनाएँ",
-  "auth.createSub": "बस एक मिनट। केवल ईमेल चाहिए।",
-  "auth.name": "नाम",
-  "auth.namePlaceholder": "आपका नाम",
-  "auth.email": "ईमेल",
-  "auth.password": "पासवर्ड",
   "auth.signIn": "साइन इन करें",
-  "auth.newHere": "नए हैं?",
-  "auth.already": "पहले से पंजीकृत हैं?",
-  "auth.needBoth": "ईमेल और पासवर्ड आवश्यक हैं।",
-  "auth.needName": "कृपया अपना नाम भरें।",
-  "auth.failed": "साइन इन विफल रहा।",
-
-  "tab.home": "होम",
-  "tab.impact": "प्रभाव",
-  "tab.updates": "सूचनाएँ",
-  "tab.profile": "प्रोफ़ाइल",
-
-  "onboard.skip": "छोड़ें",
-  "onboard.next": "आगे",
-  "onboard.start": "शुरू करें",
   "onboard.1.title": "क्षति की फ़ोटो लें",
-  "onboard.1.body": "गड्ढा, कचरे का ढेर, या खुला मैनहोल। एक तस्वीर ही काफ़ी है — श्रेणी या विभाग चुनने की ज़रूरत नहीं।",
-  "onboard.2.title": "देखें मॉडल क्या देखता है",
-  "onboard.2.body": "रिपोर्ट दर्ज करने से पहले ही डिटेक्टर क्षति की रूपरेखा बनाता है और गंभीरता आँकता है।",
-  "onboard.3.title": "समाधान तक नज़र रखें",
-  "onboard.3.body": "आपकी रिपोर्ट स्वतः सही विभाग को भेजी जाती है, और हर बदलाव की सूचना आपको मिलती है।",
-
+  "onboard.1.body": "गड्ढा, कचरे का ढेर, या खुला मैनहोल। एक तस्वीर ही काफ़ी है।",
   "home.morning": "सुप्रभात",
   "home.afternoon": "नमस्कार",
   "home.evening": "शुभ संध्या",
   "home.latest": "नवीनतम रिपोर्ट",
   "home.glance": "एक नज़र में",
   "home.all": "सभी रिपोर्ट",
-  "home.stillOpen": "आपकी {total} रिपोर्ट में से अभी काम चल रहा है",
-  "home.resolvedForYou": "आपके लिए हल हुईं",
-  "home.waitingToSend": "भेजने के लिए शेष — इसी फ़ोन में सुरक्षित",
-  "home.markedUrgent": "डिटेक्टर ने अत्यावश्यक बताया",
-  "home.search": "अपनी रिपोर्ट खोजें",
-  "home.filterAll": "सभी",
-  "home.filterOpen": "खुली",
-  "home.filterResolved": "हल",
-  "home.emptyTitle": "अभी कोई रिपोर्ट नहीं",
-  "home.emptyBody": "गड्ढे, कचरे या खुले मैनहोल की फ़ोटो लें — वह यहाँ दिखेगी।",
-
   "report.title": "समस्या दर्ज करें",
-  "report.sub": "श्रेणी, गंभीरता और विभाग आपकी तस्वीर से तय होते हैं।",
   "report.take": "फ़ोटो लें",
-  "report.add": "और फ़ोटो",
-  "report.gallery": "गैलरी से",
-  "report.check": "देखें AI क्या देखता है",
-  "report.what": "समस्या क्या है?",
-  "report.placeholder": "जैसे: स्कूल गेट के बाहर गहरा गड्ढा",
-  "report.locationOn": "स्थान जुड़ा",
-  "report.locationOff": "स्थान जोड़ें",
-  "report.locationHint": "सही वार्ड तक पहुँचाने में मदद करता है",
-  "report.useGps": "GPS लें",
-  "report.update": "बदलें",
   "report.submit": "रिपोर्ट भेजें",
-  "report.analysing": "तस्वीर की जाँच हो रही है…",
-  "report.needPhoto": "फ़ोटो आवश्यक है — श्रेणी और गंभीरता उसी से आती है।",
-  "report.needTitle": "कृपया बताएँ कि आप क्या दर्ज कर रहे हैं।",
-  "report.filed": "रिपोर्ट दर्ज हुई",
-  "report.step1": "फ़ोटो",
-  "report.step2": "विवरण",
-  "report.step3": "भेजें",
-
-  "stage.filed": "दर्ज",
-  "stage.progress": "काम जारी",
-  "stage.resolved": "हल",
-
-  "detail.back": "मेरी रिपोर्ट",
-  "detail.found": "मॉडल को क्या मिला",
-  "detail.severity": "गंभीरता",
-  "detail.progress": "प्रगति",
-  "detail.openMaps": "मैप में खोलें",
-
-  "alerts.title": "सूचनाएँ",
-  "alerts.markAll": "सभी पढ़ी हुई",
-  "alerts.caughtUp": "सब देख लिया",
-  "alerts.emptyTitle": "अभी कोई सूचना नहीं",
-
-  "impact.title": "आपका प्रभाव",
-  "impact.whatYouReport": "आप क्या दर्ज करते हैं",
-  "impact.whereTheyGot": "वे कहाँ तक पहुँचीं",
-  "impact.perMonth": "हर महीने रिपोर्ट",
-  "impact.severity": "गंभीरता",
-
-  "profile.language": "भाषा",
-  "profile.security": "सुरक्षा",
-  "profile.lock": "ऐप लॉक करें",
-  "profile.about": "जानकारी",
-  "profile.privacy": "निजता",
-  "profile.signOut": "साइन आउट",
-  "profile.howItWorks": "रिपोर्टिंग कैसे काम करती है",
-  "profile.yourReports": "आपकी रिपोर्ट",
-  "profile.waiting": "भेजने के लिए शेष",
-  "profile.none": "कोई नहीं",
-
-  "outbox.title": "भेजने के लिए शेष",
-  "outbox.sendNow": "अभी भेजें",
-  "outbox.discard": "हटाएँ",
-
-  "help.title": "रिपोर्टिंग कैसे काम करती है",
+  "report.filed": "रिपोर्ट सफलतापूर्वक दर्ज हुई",
   "common.cancel": "रद्द करें",
-  "common.couldNotLoad": "लोड नहीं हो सका",
+  "common.retry": "पुनः प्रयास करें",
 };
 
 const kn: Record<Key, string> = {
   ...en,
-  "auth.tagline": "ನಿಮ್ಮ ನಗರದ ನಾಗರಿಕ ಹಾನಿಯನ್ನು ವರದಿ ಮಾಡಿ",
-  "auth.welcome": "ಮರಳಿ ಸ್ವಾಗತ",
-  "auth.welcomeSub": "ವರದಿ ಸಲ್ಲಿಸಲು ಮತ್ತು ನೋಡಲು ಸೈನ್ ಇನ್ ಮಾಡಿ.",
-  "auth.create": "ಖಾತೆ ತೆರೆಯಿರಿ",
-  "auth.createSub": "ಒಂದು ಕ್ಷಣ ಸಾಕು. ಇಮೇಲ್ ಮಾತ್ರ ಬೇಕು.",
-  "auth.name": "ಹೆಸರು",
-  "auth.namePlaceholder": "ನಿಮ್ಮ ಹೆಸರು",
-  "auth.email": "ಇಮೇಲ್",
-  "auth.password": "ಪಾಸ್‌ವರ್ಡ್",
-  "auth.signIn": "ಸೈನ್ ಇನ್",
-  "auth.newHere": "ಹೊಸಬರೇ?",
-  "auth.already": "ಈಗಾಗಲೇ ನೋಂದಾಯಿತರೇ?",
-  "auth.needBoth": "ಇಮೇಲ್ ಮತ್ತು ಪಾಸ್‌ವರ್ಡ್ ಬೇಕು.",
-  "auth.needName": "ದಯವಿಟ್ಟು ನಿಮ್ಮ ಹೆಸರು ಬರೆಯಿರಿ.",
-  "auth.failed": "ಸೈನ್ ಇನ್ ವಿಫಲವಾಯಿತು.",
-
   "tab.home": "ಮುಖಪುಟ",
-  "tab.impact": "ಪರಿಣಾಮ",
+  "tab.feed": "ಸಮುದಾಯ",
+  "tab.map": "ಹೀಟ್‌ಮ್ಯಾಪ್",
+  "tab.tracking": "ಲೈವ್ ಸ್ಥಿತಿ",
+  "tab.voice": "ಧ್ವನಿ ವರದಿ",
+  "tab.sos": "ತುರ್ತು ಎಚ್ಚರಿಕೆ",
+  "tab.leaderboard": "ನಾಗರಿಕ ಕರ್ಮ",
   "tab.updates": "ಸೂಚನೆಗಳು",
   "tab.profile": "ಪ್ರೊಫೈಲ್",
-
-  "onboard.skip": "ಬಿಟ್ಟುಬಿಡಿ",
-  "onboard.next": "ಮುಂದೆ",
-  "onboard.start": "ಪ್ರಾರಂಭಿಸಿ",
-  "onboard.1.title": "ಹಾನಿಯ ಫೋಟೋ ತೆಗೆಯಿರಿ",
-  "onboard.1.body": "ಗುಂಡಿ, ಕಸದ ರಾಶಿ ಅಥವಾ ತೆರೆದ ಮ್ಯಾನ್‌ಹೋಲ್. ಒಂದು ಚಿತ್ರ ಸಾಕು — ವರ್ಗ ಅಥವಾ ಇಲಾಖೆ ಆಯ್ಕೆ ಮಾಡಬೇಕಿಲ್ಲ.",
-  "onboard.2.title": "ಮಾದರಿ ಏನು ಕಾಣುತ್ತದೆ ನೋಡಿ",
-  "onboard.2.body": "ಸಲ್ಲಿಸುವ ಮೊದಲೇ ಡಿಟೆಕ್ಟರ್ ಹಾನಿಯ ಗಡಿ ಎಳೆದು ಗಂಭೀರತೆ ಅಳೆಯುತ್ತದೆ.",
-  "onboard.3.title": "ಪರಿಹಾರದವರೆಗೆ ಗಮನಿಸಿ",
-  "onboard.3.body": "ನಿಮ್ಮ ವರದಿ ತಾನಾಗಿಯೇ ಸರಿಯಾದ ಇಲಾಖೆಗೆ ಹೋಗುತ್ತದೆ, ಪ್ರತಿ ಬದಲಾವಣೆಯೂ ನಿಮಗೆ ತಿಳಿಯುತ್ತದೆ.",
-
+  "auth.tagline": "ನಿಮ್ಮ ನಗರದ ನಾಗರಿಕ ಹಾನಿಯನ್ನು ವರದಿ ಮಾಡಿ ಮತ್ತು ಲೈವ್ ಗಮನಿಸಿ",
+  "auth.welcome": "ಮರಳಿ ಸ್ವಾಗತ",
+  "auth.create": "ಖಾತೆ ತೆರೆಯಿರಿ",
+  "auth.signIn": "ಸೈನ್ ಇನ್",
   "home.morning": "ಶುಭೋದಯ",
   "home.afternoon": "ಶುಭ ಮಧ್ಯಾಹ್ನ",
   "home.evening": "ಶುಭ ಸಂಜೆ",
   "home.latest": "ಇತ್ತೀಚಿನ ವರದಿ",
-  "home.glance": "ಒಂದು ನೋಟದಲ್ಲಿ",
-  "home.all": "ಎಲ್ಲಾ ವರದಿಗಳು",
-  "home.stillOpen": "ನಿಮ್ಮ {total} ವರದಿಗಳಲ್ಲಿ ಇನ್ನೂ ಕೆಲಸ ನಡೆಯುತ್ತಿದೆ",
-  "home.resolvedForYou": "ನಿಮಗಾಗಿ ಪರಿಹರಿಸಲಾಗಿದೆ",
-  "home.waitingToSend": "ಕಳುಹಿಸಲು ಬಾಕಿ — ಈ ಫೋನಿನಲ್ಲಿ ಉಳಿಸಲಾಗಿದೆ",
-  "home.markedUrgent": "ಡಿಟೆಕ್ಟರ್ ತುರ್ತು ಎಂದಿದೆ",
-  "home.search": "ನಿಮ್ಮ ವರದಿಗಳನ್ನು ಹುಡುಕಿ",
-  "home.filterAll": "ಎಲ್ಲಾ",
-  "home.filterOpen": "ತೆರೆದಿದೆ",
-  "home.filterResolved": "ಪರಿಹೃತ",
-  "home.emptyTitle": "ಇನ್ನೂ ವರದಿಗಳಿಲ್ಲ",
-  "home.emptyBody": "ಗುಂಡಿ, ಕಸ ಅಥವಾ ತೆರೆದ ಮ್ಯಾನ್‌ಹೋಲ್ ಫೋಟೋ ತೆಗೆಯಿರಿ — ಇಲ್ಲಿ ಕಾಣಿಸುತ್ತದೆ.",
-
   "report.title": "ಸಮಸ್ಯೆ ವರದಿ ಮಾಡಿ",
-  "report.sub": "ವರ್ಗ, ಗಂಭೀರತೆ ಮತ್ತು ಇಲಾಖೆ ನಿಮ್ಮ ಫೋಟೋದಿಂದ ನಿರ್ಧಾರವಾಗುತ್ತದೆ.",
   "report.take": "ಫೋಟೋ ತೆಗೆಯಿರಿ",
-  "report.add": "ಇನ್ನೊಂದು ಫೋಟೋ",
-  "report.gallery": "ಗ್ಯಾಲರಿಯಿಂದ",
-  "report.check": "AI ಏನು ಕಾಣುತ್ತದೆ ನೋಡಿ",
-  "report.what": "ಸಮಸ್ಯೆ ಏನು?",
-  "report.placeholder": "ಉದಾ: ಶಾಲೆಯ ಗೇಟ್ ಬಳಿ ಆಳವಾದ ಗುಂಡಿ",
-  "report.locationOn": "ಸ್ಥಳ ಸೇರಿಸಲಾಗಿದೆ",
-  "report.locationOff": "ಸ್ಥಳ ಸೇರಿಸಿ",
-  "report.locationHint": "ಸರಿಯಾದ ವಾರ್ಡ್‌ಗೆ ತಲುಪಿಸಲು ಸಹಾಯ",
-  "report.useGps": "GPS ಬಳಸಿ",
-  "report.update": "ಬದಲಿಸಿ",
-  "report.submit": "ವರದಿ ಕಳುಹಿಸಿ",
-  "report.analysing": "ಫೋಟೋ ಪರಿಶೀಲನೆ…",
-  "report.needPhoto": "ಫೋಟೋ ಅಗತ್ಯ — ವರ್ಗ ಮತ್ತು ಗಂಭೀರತೆ ಅದರಿಂದಲೇ.",
-  "report.needTitle": "ದಯವಿಟ್ಟು ಏನು ವರದಿ ಮಾಡುತ್ತಿದ್ದೀರಿ ಎಂದು ಬರೆಯಿರಿ.",
-  "report.filed": "ವರದಿ ಸಲ್ಲಿಕೆಯಾಗಿದೆ",
-  "report.step1": "ಫೋಟೋ",
-  "report.step2": "ವಿವರ",
-  "report.step3": "ಸಲ್ಲಿಸಿ",
-
-  "stage.filed": "ಸಲ್ಲಿಕೆ",
-  "stage.progress": "ಕೆಲಸ ನಡೆಯುತ್ತಿದೆ",
-  "stage.resolved": "ಪರಿಹೃತ",
-
-  "detail.back": "ನನ್ನ ವರದಿಗಳು",
-  "detail.found": "ಮಾದರಿ ಏನು ಕಂಡಿತು",
-  "detail.severity": "ಗಂಭೀರತೆ",
-  "detail.progress": "ಪ್ರಗತಿ",
-  "detail.openMaps": "ನಕ್ಷೆಯಲ್ಲಿ ತೆರೆಯಿರಿ",
-
-  "alerts.title": "ಸೂಚನೆಗಳು",
-  "alerts.markAll": "ಎಲ್ಲಾ ಓದಲಾಗಿದೆ",
-  "alerts.caughtUp": "ಎಲ್ಲಾ ನೋಡಲಾಗಿದೆ",
-  "alerts.emptyTitle": "ಇನ್ನೂ ಸೂಚನೆಗಳಿಲ್ಲ",
-
-  "impact.title": "ನಿಮ್ಮ ಪರಿಣಾಮ",
-  "impact.whatYouReport": "ನೀವು ಏನು ವರದಿ ಮಾಡುತ್ತೀರಿ",
-  "impact.whereTheyGot": "ಅವು ಎಲ್ಲಿಗೆ ತಲುಪಿವೆ",
-  "impact.perMonth": "ತಿಂಗಳಿಗೆ ವರದಿಗಳು",
-  "impact.severity": "ಗಂಭೀರತೆ",
-
-  "profile.language": "ಭಾಷೆ",
-  "profile.security": "ಭದ್ರತೆ",
-  "profile.lock": "ಆ್ಯಪ್ ಲಾಕ್ ಮಾಡಿ",
-  "profile.about": "ಮಾಹಿತಿ",
-  "profile.privacy": "ಖಾಸಗಿತನ",
-  "profile.signOut": "ಸೈನ್ ಔಟ್",
-  "profile.howItWorks": "ವರದಿ ಹೇಗೆ ಕೆಲಸ ಮಾಡುತ್ತದೆ",
-  "profile.yourReports": "ನಿಮ್ಮ ವರದಿಗಳು",
-  "profile.waiting": "ಕಳುಹಿಸಲು ಬಾಕಿ",
-  "profile.none": "ಯಾವುದೂ ಇಲ್ಲ",
-
-  "outbox.title": "ಕಳುಹಿಸಲು ಬಾಕಿ",
-  "outbox.sendNow": "ಈಗ ಕಳುಹಿಸಿ",
-  "outbox.discard": "ತೆಗೆದುಹಾಕಿ",
-
-  "help.title": "ವರದಿ ಹೇಗೆ ಕೆಲಸ ಮಾಡುತ್ತದೆ",
+  "report.submit": "ವರದಿ ಸಲ್ಲಿಸಿ",
   "common.cancel": "ರದ್ದುಮಾಡಿ",
-  "common.couldNotLoad": "ಲೋಡ್ ಆಗಲಿಲ್ಲ",
+  "common.retry": "ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ",
 };
 
-const DICT: Record<Lang, Record<Key, string>> = { en, hi, kn };
+const ta: Record<Key, string> = {
+  ...en,
+  "tab.home": "முகப்பு",
+  "tab.feed": "சமூகம்",
+  "tab.map": "வெப்ப வரைபடம்",
+  "tab.tracking": "நேரடி நிலை",
+  "tab.voice": "குரல் புகார்",
+  "tab.sos": "அவசர உதவி",
+  "tab.leaderboard": "குடிமக்கள் கர்மா",
+  "tab.updates": "அறிவிப்புகள்",
+  "tab.profile": "சுயவிவரம்",
+  "auth.tagline": "நகர சேதங்களை உடனுக்குடன் புகாரளித்து கண்காணிக்கவும்",
+  "auth.welcome": "மீண்டும் வருக",
+  "auth.signIn": "உள்நுழைக",
+  "home.morning": "காலை வணக்கம்",
+  "home.afternoon": "மதிய வணக்கம்",
+  "home.evening": "மாலை வணக்கம்",
+  "report.title": "பிரச்சினையை புகாரளிக்கவும்",
+  "report.take": "புகைப்படம் எடுக்கவும்",
+  "report.submit": "புகாரை சமர்ப்பிக்கவும்",
+  "common.cancel": "ரத்துசெய்",
+  "common.retry": "மீண்டும் முயற்சி செய்",
+};
+
+const te: Record<Key, string> = {
+  ...en,
+  "tab.home": "హోమ్",
+  "tab.feed": "కమ్యూనిటీ",
+  "tab.map": "హీట్‌మ్యాప్",
+  "tab.tracking": "లైవ్ స్థితి",
+  "tab.voice": "వాయిస్ రిపోర్ట్",
+  "tab.sos": "ఎమర్జెన్సీ",
+  "tab.leaderboard": "సివిక్ కర్మ",
+  "tab.updates": "అప్‌డేట్లు",
+  "tab.profile": "ప్రొఫైల్",
+  "auth.tagline": "మీ నగర సమస్యలను నివేదించి లైవ్ పర్యవేక్షించండి",
+  "auth.welcome": "స్వాగతం",
+  "auth.signIn": "సైన్ ఇన్",
+  "home.morning": "శుభోదయం",
+  "home.afternoon": "శుభ మధ్యాహ్నం",
+  "home.evening": "శుభ సాయంత్రం",
+  "report.title": "సమస్యను నివేదించండి",
+  "report.take": "ఫోటో తీయండి",
+  "report.submit": "నివేదిక పంపండి",
+  "common.cancel": "రద్దు చేయండి",
+  "common.retry": "మళ్ళీ ప్రయత్నించండి",
+};
+
+const es: Record<Key, string> = {
+  ...en,
+  "tab.home": "Inicio",
+  "tab.feed": "Comunidad",
+  "tab.map": "Mapa de Calor",
+  "tab.tracking": "En Vivo",
+  "tab.voice": "Reporte de Voz",
+  "tab.sos": "Emergencia",
+  "tab.leaderboard": "Karma Cívico",
+  "tab.updates": "Alertas",
+  "tab.profile": "Perfil",
+  "auth.tagline": "Reporta daños cívicos y monitorea reparaciones en tiempo real",
+  "auth.welcome": "Bienvenido de nuevo",
+  "auth.signIn": "Iniciar sesión",
+  "home.morning": "Buenos días",
+  "home.afternoon": "Buenas tardes",
+  "home.evening": "Buenas noches",
+  "report.title": "Reportar un problema",
+  "report.take": "Tomar foto",
+  "report.submit": "Enviar reporte",
+  "common.cancel": "Cancelar",
+  "common.retry": "Reintentar",
+};
+
+const fr: Record<Key, string> = {
+  ...en,
+  "tab.home": "Accueil",
+  "tab.feed": "Communauté",
+  "tab.map": "Carte Thermique",
+  "tab.tracking": "En Direct",
+  "tab.voice": "Rapport Vocal",
+  "tab.sos": "Urgence",
+  "tab.leaderboard": "Karma Civique",
+  "tab.updates": "Alertes",
+  "tab.profile": "Profil",
+  "auth.tagline": "Signalez les dégradations urbaines et suivez les réparations",
+  "auth.welcome": "Bon retour",
+  "auth.signIn": "Se connecter",
+  "home.morning": "Bonjour",
+  "home.afternoon": "Bon après-midi",
+  "home.evening": "Bonsoir",
+  "report.title": "Signaler un problème",
+  "report.take": "Prendre une photo",
+  "report.submit": "Soumettre le rapport",
+  "common.cancel": "Annuler",
+  "common.retry": "Réessayer",
+};
+
+const de: Record<Key, string> = {
+  ...en,
+  "tab.home": "Startseite",
+  "tab.feed": "Gemeinschaft",
+  "tab.map": "Gefahrenkarte",
+  "tab.tracking": "Live-Status",
+  "tab.voice": "Sprachbericht",
+  "tab.sos": "Notfall",
+  "tab.leaderboard": "Bürger-Karma",
+  "tab.updates": "Meldungen",
+  "tab.profile": "Profil",
+  "auth.tagline": "Stadtschäden melden und Reparaturen in Echtzeit verfolgen",
+  "auth.welcome": "Willkommen zurück",
+  "auth.signIn": "Anmelden",
+  "home.morning": "Guten Morgen",
+  "home.afternoon": "Guten Tag",
+  "home.evening": "Guten Abend",
+  "report.title": "Schaden melden",
+  "report.take": "Foto aufnehmen",
+  "report.submit": "Bericht einreichen",
+  "common.cancel": "Abbrechen",
+  "common.retry": "Erneut versuchen",
+};
+
+const DICT: Record<Lang, Record<Key, string>> = { en, hi, kn, ta, te, es, fr, de };
 const LANG_KEY = "lumen_lang";
 
 type Ctx = {
@@ -451,8 +403,6 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     (async () => {
       const saved = (await AsyncStorage.getItem(LANG_KEY)) as Lang | null;
       if (saved && saved in DICT) return setLangState(saved);
-      // Fall back to the phone's own language, so a Kannada handset opens in
-      // Kannada without anyone being asked to find a setting first.
       const device = Localization.getLocales()[0]?.languageCode as Lang | undefined;
       if (device && device in DICT) setLangState(device);
     })();
@@ -463,14 +413,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem(LANG_KEY, l).catch(() => {});
   }, []);
 
-  const t = useCallback((key: Key, vars?: Record<string, string | number>) => {
-    // Falls through to English for any string not yet translated, which is why
-    // hi and kn spread en: a half-finished translation shows English, never a
-    // raw key.
-    let out = DICT[lang][key] ?? en[key] ?? String(key);
-    if (vars) for (const [k, v] of Object.entries(vars)) out = out.replace(`{${k}}`, String(v));
-    return out;
-  }, [lang]);
+  const t = useCallback(
+    (key: Key, vars?: Record<string, string | number>) => {
+      let out = DICT[lang]?.[key] ?? en[key] ?? String(key);
+      if (vars) {
+        for (const [k, v] of Object.entries(vars)) {
+          out = out.replace(`{${k}}`, String(v));
+        }
+      }
+      return out;
+    },
+    [lang]
+  );
 
   return <I18nContext.Provider value={{ lang, setLang, t }}>{children}</I18nContext.Provider>;
 }

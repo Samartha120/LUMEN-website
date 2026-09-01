@@ -426,3 +426,54 @@ export const TRANSITIONS: Record<string, { to: string; label: string; roles: str
 
 export const STAFF_ROLES = ["SUPERVISOR", "ADMINISTRATOR", "ENGINEER"];
 export const isStaff = (role?: string | null) => STAFF_ROLES.includes(String(role ?? "").toUpperCase());
+
+export type PotholeMeasurement = {
+  label: string;
+  lengthM: number;
+  widthM: number;
+  depthM: number;
+  source: "MEASURED" | "ESTIMATED";
+};
+
+export type RoadType = "BITUMINOUS" | "CONCRETE";
+
+/**
+ * Record what the engineer measured on site.
+ *
+ * Submitted as the whole list, because the server replaces wholesale: an edit
+ * that removes a row has to remove it there too, and sending a delta would
+ * leave a deleted pothole in the material order.
+ */
+export async function saveMeasurements(
+  ref: string,
+  roadType: RoadType,
+  potholes: PotholeMeasurement[],
+) {
+  const res = await fetch(`${API_URL}/api/complaints/${ref}/measurements`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ roadType, potholes }),
+  });
+  return await parse(res);
+}
+
+/**
+ * What the detector thinks the dimensions are, from the photograph alone.
+ *
+ * Offered as a starting point for the form, never as the answer: the server
+ * marks anything from here as ESTIMATED, and an engineer standing over the
+ * hole with a tape measure should overwrite it.
+ */
+export async function suggestDimensions(ref: string) {
+  const res = await fetch(`${API_URL}/api/complaints/${ref}/suggest-dimensions`, {
+    headers: await authHeaders(),
+  });
+  return (await parse(res)) as { potholes: PotholeMeasurement[]; note: string };
+}
+
+export async function estimateFor(ref: string) {
+  const res = await fetch(`${API_URL}/api/complaints/${ref}/estimate`, {
+    headers: await authHeaders(),
+  });
+  return await parse(res);
+}

@@ -170,3 +170,31 @@ export const T = {
   accent: C.accent, ok: C.ok, warn: C.warn, bad: C.bad,
 };
 export const priorityColour = (p?: string | null) => tone(p).fg;
+
+
+/**
+ * The same tokens under the names the newer screens reach for.
+ *
+ * `C`/`S`/`R`/`F` are the originals and remain the source of truth; this is a
+ * second doorway onto them, not a second palette. Two sets of values would
+ * drift the moment one of them was edited, so every field here points at the
+ * object above rather than repeating a hex code.
+ */
+export const theme = {
+  colors: {
+    primary: C.brand,
+    background: C.bg,
+    card: C.surface,
+    border: C.line,
+    text: C.ink,
+    textMuted: C.muted,
+    success: C.ok,
+    warning: C.warn,
+    danger: C.bad,
+  },
+  spacing: { xs: S.xs, sm: S.sm, md: S.md, lg: S.lg, xl: S.xl },
+  radius: { sm: R.sm, md: R.md, lg: R.lg, xl: R.xl, full: R.pill },
+  typography: {
+    sizes: { xs: 11, sm: 13, md: 15, lg: 18 },
+  },
+} as const;

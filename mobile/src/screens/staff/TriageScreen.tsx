@@ -20,11 +20,12 @@ import { Icon } from "../../Icon";
  * shows a button that fails politely — never one that quietly does the wrong
  * thing.
  */
-export default function TriageScreen({ refCode, role, onBack, onChanged }: {
+export default function TriageScreen({ refCode, role, onBack, onChanged, onMeasure }: {
   refCode: string;
   role: string;
   onBack: () => void;
   onChanged: () => void;
+  onMeasure: (ref: string) => void;
 }) {
   const [c, setC] = useState<ComplaintDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -159,6 +160,23 @@ export default function TriageScreen({ refCode, role, onBack, onChanged }: {
         </>
       )}
 
+      {/* Measuring only applies to road damage; the endpoint refuses anything
+          else, so the button is not offered for waste or water. */}
+      {c.civicCategory === "ROADS" && (
+        <>
+          <SectionTitle>On site</SectionTitle>
+          <Pressable
+            onPress={() => onMeasure(refCode)}
+            style={({ pressed }) => [s.measure, pressed && { opacity: 0.9 }]}
+          >
+            <Icon name="edit-3" size={17} color={C.ink} />
+            <Text style={s.measureText}>Record measurements</Text>
+            <View style={{ flex: 1 }} />
+            <Icon name="chevron-right" size={17} color={C.muted} />
+          </Pressable>
+        </>
+      )}
+
       <SectionTitle>Detection</SectionTitle>
       <View style={[card, s.block]}>
         {detections.length === 0 ? (
@@ -245,6 +263,13 @@ const s = StyleSheet.create({
   actionGo: { backgroundColor: C.brand },
   actionBad: { backgroundColor: C.badSoft, borderWidth: 1.5, borderColor: "#f6cfcc" },
   actionText: { ...F.bodyStrong, fontSize: 16, fontWeight: "800", color: C.ink },
+
+  measure: {
+    flexDirection: "row", alignItems: "center", gap: S.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.line,
+    borderRadius: R.md, padding: S.lg,
+  },
+  measureText: { ...F.bodyStrong },
 
   block: { padding: S.lg },
   body: { ...F.body },

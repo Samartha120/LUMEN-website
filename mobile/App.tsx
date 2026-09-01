@@ -22,29 +22,76 @@ import QueueScreen from "./src/screens/staff/QueueScreen";
 import TriageScreen from "./src/screens/staff/TriageScreen";
 import OpsScreen from "./src/screens/staff/OpsScreen";
 import AssistantScreen from "./src/screens/staff/AssistantScreen";
+import MeasureScreen from "./src/screens/staff/MeasureScreen";
+
+// Interactive citizen and staff screens
+import { CommunityFeedScreen } from "./src/screens/CommunityFeedScreen";
+import { HeatmapScreen } from "./src/screens/HeatmapScreen";
+import { LiveTrackingScreen } from "./src/screens/LiveTrackingScreen";
+import { VoiceReportScreen } from "./src/screens/VoiceReportScreen";
+import { EmergencySOSScreen } from "./src/screens/EmergencySOSScreen";
+import { CivicLeaderboardScreen } from "./src/screens/CivicLeaderboardScreen";
+import { NotificationCenterScreen } from "./src/screens/NotificationCenterScreen";
+import { VerificationScreen } from "./src/screens/staff/VerificationScreen";
+
+// Newly built advanced modules
+import { VolunteerDrivesScreen } from "./src/screens/VolunteerDrivesScreen";
+import { SafeRouteScreen } from "./src/screens/SafeRouteScreen";
+import { AssetScannerScreen } from "./src/screens/AssetScannerScreen";
+import { WardBudgetScreen } from "./src/screens/WardBudgetScreen";
+import { FloodMonitorScreen } from "./src/screens/FloodMonitorScreen";
+import { FieldToolkitScreen } from "./src/screens/staff/FieldToolkitScreen";
+
 import { C, S } from "./src/theme";
 import { I18nProvider, useT } from "./src/i18n";
+import {
+  CivicFeedProvider,
+  NotificationProvider,
+  OfflineQueueProvider,
+  KarmaProvider,
+  EmergencyAlertProvider,
+} from "./src/state";
 import { Icon, IconName } from "./src/Icon";
 
-type Tab =
-  | "home" | "insights" | "report" | "alerts" | "profile"   // citizen
-  | "queue" | "ops" | "assistant";                          // staff
-/** Pushed over the tabs, and dismissed back to wherever you were. */
-type Sheet = { kind: "detail"; ref: string } | { kind: "outbox" } | { kind: "help" } | null;
+export type Tab =
+  | "home" | "feed" | "map" | "report" | "alerts" | "profile" | "tracking" | "voice" | "sos" | "leaderboard" | "insights"
+  | "volunteers" | "routes" | "assets" | "budget" | "flood"
+  | "queue" | "ops" | "assistant" | "measure" | "verify" | "toolkit";
 
-/**
- * Navigation is a piece of state rather than a router.
- *
- * Two apps share this shell. A citizen gets Home, Impact, report, Updates and
- * Profile; a supervisor or engineer gets the Queue, Operations and the
- * assistant instead. Which one you see follows the role on the session, and
- * the server enforces the same split independently — every staff endpoint
- * checks the role itself, so hiding the tabs is a courtesy, not the control.
- */
+export type Sheet =
+  | { kind: "detail"; ref: string }
+  | { kind: "measure"; ref: string }
+  | { kind: "verify"; ref: string }
+  | { kind: "tracking"; ref: string }
+  | { kind: "voice" }
+  | { kind: "sos" }
+  | { kind: "leaderboard" }
+  | { kind: "map" }
+  | { kind: "feed" }
+  | { kind: "volunteers" }
+  | { kind: "routes" }
+  | { kind: "assets" }
+  | { kind: "budget" }
+  | { kind: "flood" }
+  | { kind: "toolkit" }
+  | { kind: "outbox" }
+  | { kind: "help" }
+  | null;
+
 export default function App() {
   return (
     <I18nProvider>
-      <Shell />
+      <OfflineQueueProvider>
+        <NotificationProvider>
+          <CivicFeedProvider>
+            <KarmaProvider>
+              <EmergencyAlertProvider>
+                <Shell />
+              </EmergencyAlertProvider>
+            </KarmaProvider>
+          </CivicFeedProvider>
+        </NotificationProvider>
+      </OfflineQueueProvider>
     </I18nProvider>
   );
 }
@@ -60,8 +107,6 @@ function Shell() {
   const [reloadKey, setReloadKey] = useState(0);
   const [unread, setUnread] = useState(0);
 
-  // A stored token may be expired or from a server that has since been reset,
-  // so it is checked against /me rather than trusted on sight.
   useEffect(() => {
     (async () => {
       setOnboarded((await AsyncStorage.getItem(SEEN_KEY)) === "1");
@@ -80,14 +125,16 @@ function Shell() {
     })();
   }, []);
 
-  // Anything written down while offline goes out as soon as the app opens with
-  // a signal, without the user having to remember it is there.
   useEffect(() => {
     if (!user || locked) return;
     (async () => {
       const { sent } = await flushOutbox();
       if (sent.length) setReloadKey((k) => k + 1);
-      try { setUnread((await notifications()).unread ?? 0); } catch { /* offline */ }
+      try {
+        setUnread((await notifications()).unread ?? 0);
+      } catch {
+        /* offline */
+      }
     })();
   }, [user, locked, reloadKey]);
 
@@ -120,7 +167,12 @@ function Shell() {
     return (
       <>
         <StatusBar style="dark" />
-        <LoginScreen onSignedIn={(u) => { setUser(u); if (isStaff(u?.role)) setTab("queue"); }} />
+        <LoginScreen
+          onSignedIn={(u) => {
+            setUser(u);
+            if (isStaff(u?.role)) setTab("queue");
+          }}
+        />
       </>
     );
   }
@@ -135,6 +187,7 @@ function Shell() {
   }
 
   const openDetail = (ref: string) => setSheet({ kind: "detail", ref });
+  const openTracking = (ref: string) => setSheet({ kind: "tracking", ref });
   const role = String(user?.role ?? "CITIZEN").toUpperCase();
   const staff = isStaff(role);
 
@@ -142,29 +195,135 @@ function Shell() {
     <SafeAreaView style={s.safe}>
       <StatusBar style="dark" />
       <View style={s.bar}>
-        <Text style={s.wordmark}>LUMEN</Text>
-        <Pressable onPress={() => { setSheet(null); setTab("profile"); }} hitSlop={8}>
-          <View style={s.avatar}>
-            <Text style={s.avatarText}>
-              {String(user?.name ?? "?").trim().charAt(0).toUpperCase()}
-            </Text>
-          </View>
+        <Pressable onPress={() => { setSheet(null); setTab("home"); }}>
+          <Text style={s.wordmark}>LUMEN</Text>
         </Pressable>
+
+        {/* Quick action buttons on citizen top bar */}
+        <View style={s.topActions}>
+          {!staff ? (
+            <>
+              <Pressable
+                style={s.topIconBtn}
+                onPress={() => setSheet({ kind: "volunteers" })}
+                hitSlop={6}
+              >
+                <Icon name="users" size={17} color="#10B981" />
+              </Pressable>
+
+              <Pressable
+                style={s.topIconBtn}
+                onPress={() => setSheet({ kind: "routes" })}
+                hitSlop={6}
+              >
+                <Icon name="navigation" size={17} color={C.brand} />
+              </Pressable>
+
+              <Pressable
+                style={s.topIconBtn}
+                onPress={() => setSheet({ kind: "assets" })}
+                hitSlop={6}
+              >
+                <Icon name="tag" size={17} color="#3B82F6" />
+              </Pressable>
+
+              <Pressable
+                style={s.topIconBtn}
+                onPress={() => setSheet({ kind: "budget" })}
+                hitSlop={6}
+              >
+                <Icon name="dollar-sign" size={17} color="#8B5CF6" />
+              </Pressable>
+
+              <Pressable
+                style={s.topIconBtn}
+                onPress={() => setSheet({ kind: "sos" })}
+                hitSlop={6}
+              >
+                <Icon name="alert-triangle" size={17} color="#EF4444" />
+              </Pressable>
+            </>
+          ) : (
+            <Pressable
+              style={s.topIconBtn}
+              onPress={() => setSheet({ kind: "toolkit" })}
+              hitSlop={6}
+            >
+              <Icon name="tool" size={17} color={C.brand} />
+            </Pressable>
+          )}
+
+          <Pressable
+            onPress={() => {
+              setSheet(null);
+              setTab("profile");
+            }}
+            hitSlop={8}
+          >
+            <View style={s.avatar}>
+              <Text style={s.avatarText}>
+                {String(user?.name ?? "?").trim().charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          </Pressable>
+        </View>
       </View>
 
       <View style={s.body}>
         {sheet?.kind === "detail" ? (
-          // Staff get the version with the workflow buttons on it; a citizen
-          // gets the read-only one. Same complaint, different job.
           staff ? (
             <TriageScreen
-              refCode={sheet.ref} role={role}
+              refCode={sheet.ref}
+              role={role}
               onBack={() => setSheet(null)}
               onChanged={() => setReloadKey((k) => k + 1)}
+              onMeasure={(ref) => setSheet({ kind: "measure", ref })}
             />
           ) : (
             <DetailScreen refCode={sheet.ref} onBack={() => setSheet(null)} />
           )
+        ) : sheet?.kind === "measure" ? (
+          <MeasureScreen
+            refCode={sheet.ref}
+            onBack={() => setSheet({ kind: "detail", ref: sheet.ref })}
+            onSaved={() => setReloadKey((k) => k + 1)}
+          />
+        ) : sheet?.kind === "verify" ? (
+          <VerificationScreen navigation={{ goBack: () => setSheet(null) }} />
+        ) : sheet?.kind === "tracking" ? (
+          <LiveTrackingScreen
+            route={{ params: { complaintId: sheet.ref } }}
+            navigation={{ goBack: () => setSheet(null) }}
+          />
+        ) : sheet?.kind === "voice" ? (
+          <VoiceReportScreen
+            navigation={{
+              navigate: (screen: string, params: any) => {
+                setSheet(null);
+                if (screen === "LiveTracking") openTracking(params?.complaintId || "cmp-001");
+              },
+            }}
+          />
+        ) : sheet?.kind === "sos" ? (
+          <EmergencySOSScreen />
+        ) : sheet?.kind === "leaderboard" ? (
+          <CivicLeaderboardScreen />
+        ) : sheet?.kind === "volunteers" ? (
+          <VolunteerDrivesScreen />
+        ) : sheet?.kind === "routes" ? (
+          <SafeRouteScreen />
+        ) : sheet?.kind === "assets" ? (
+          <AssetScannerScreen navigation={{ navigate: (screen: string) => { setSheet(null); setTab(screen as any); } }} />
+        ) : sheet?.kind === "budget" ? (
+          <WardBudgetScreen />
+        ) : sheet?.kind === "flood" ? (
+          <FloodMonitorScreen />
+        ) : sheet?.kind === "toolkit" ? (
+          <FieldToolkitScreen />
+        ) : sheet?.kind === "map" ? (
+          <HeatmapScreen />
+        ) : sheet?.kind === "feed" ? (
+          <CommunityFeedScreen />
         ) : sheet?.kind === "outbox" ? (
           <OutboxScreen onBack={() => setSheet(null)} onSent={() => setReloadKey((k) => k + 1)} />
         ) : sheet?.kind === "help" ? (
@@ -175,10 +334,19 @@ function Shell() {
           <OpsScreen role={role} onOpen={openDetail} reloadKey={reloadKey} />
         ) : tab === "assistant" ? (
           <AssistantScreen />
+        ) : tab === "verify" ? (
+          <VerificationScreen navigation={{ goBack: () => setTab("queue") }} />
+        ) : tab === "feed" ? (
+          <CommunityFeedScreen />
+        ) : tab === "map" ? (
+          <HeatmapScreen />
         ) : tab === "report" ? (
-          <ReportScreen onFiled={() => {
-            setReloadKey((k) => k + 1); setTab(staff ? "queue" : "home");
-          }} />
+          <ReportScreen
+            onFiled={() => {
+              setReloadKey((k) => k + 1);
+              setTab(staff ? "queue" : "home");
+            }}
+          />
         ) : tab === "home" ? (
           <MyReportsScreen onOpen={openDetail} reloadKey={reloadKey} name={user?.name} />
         ) : tab === "insights" ? (
@@ -199,12 +367,25 @@ function Shell() {
         <View style={s.tabs}>
           {staff ? (
             <>
-              <TabButton icon="inbox" label="Queue" on={tab === "queue"}
-                onPress={() => { setTab("queue"); setReloadKey((k) => k + 1); }} />
-              <TabButton icon="map" label="Ops" on={tab === "ops"}
-                onPress={() => { setTab("ops"); setReloadKey((k) => k + 1); }} />
+              <TabButton
+                icon="inbox"
+                label="Queue"
+                on={tab === "queue"}
+                onPress={() => {
+                  setTab("queue");
+                  setReloadKey((k) => k + 1);
+                }}
+              />
+              <TabButton
+                icon="map"
+                label="Ops"
+                on={tab === "ops"}
+                onPress={() => {
+                  setTab("ops");
+                  setReloadKey((k) => k + 1);
+                }}
+              />
 
-              {/* Staff file reports too — often the first person on site. */}
               <Pressable
                 style={({ pressed }) => [s.fab, pressed && { transform: [{ scale: 0.96 }] }]}
                 onPress={() => setTab("report")}
@@ -212,20 +393,40 @@ function Shell() {
                 <Icon name="camera" size={23} color={C.brand} />
               </Pressable>
 
-              <TabButton icon="message-circle" label="Ask" on={tab === "assistant"}
-                onPress={() => setTab("assistant")} />
-              <TabButton icon="user" label={t("tab.profile")} on={tab === "profile"}
-                onPress={() => setTab("profile")} />
+              <TabButton
+                icon="check-circle"
+                label="Verify"
+                on={tab === "verify"}
+                onPress={() => setTab("verify")}
+              />
+              <TabButton
+                icon="user"
+                label={t("tab.profile")}
+                on={tab === "profile"}
+                onPress={() => setTab("profile")}
+              />
             </>
           ) : (
             <>
-              <TabButton icon="home" label={t("tab.home")} on={tab === "home"}
-                onPress={() => { setTab("home"); setReloadKey((k) => k + 1); }} />
-              <TabButton icon="bar-chart-2" label={t("tab.impact")} on={tab === "insights"}
-                onPress={() => { setTab("insights"); setReloadKey((k) => k + 1); }} />
+              <TabButton
+                icon="home"
+                label={t("tab.home")}
+                on={tab === "home"}
+                onPress={() => {
+                  setTab("home");
+                  setReloadKey((k) => k + 1);
+                }}
+              />
+              <TabButton
+                icon="users"
+                label="Community"
+                on={tab === "feed"}
+                onPress={() => {
+                  setTab("feed");
+                  setReloadKey((k) => k + 1);
+                }}
+              />
 
-              {/* Reporting is the reason the app exists, so it is not a tab
-                  competing with the others — it is the button in the middle. */}
               <Pressable
                 style={({ pressed }) => [s.fab, pressed && { transform: [{ scale: 0.96 }] }]}
                 onPress={() => setTab("report")}
@@ -233,10 +434,25 @@ function Shell() {
                 <Icon name="camera" size={23} color={C.brand} />
               </Pressable>
 
-              <TabButton icon="bell" label={t("tab.updates")} on={tab === "alerts"} badge={unread}
-                onPress={() => { setTab("alerts"); setReloadKey((k) => k + 1); }} />
-              <TabButton icon="user" label={t("tab.profile")} on={tab === "profile"}
-                onPress={() => setTab("profile")} />
+              <TabButton
+                icon="map-pin"
+                label="Heatmap"
+                on={tab === "map"}
+                onPress={() => {
+                  setTab("map");
+                  setReloadKey((k) => k + 1);
+                }}
+              />
+              <TabButton
+                icon="bell"
+                label={t("tab.updates")}
+                on={tab === "alerts"}
+                badge={unread}
+                onPress={() => {
+                  setTab("alerts");
+                  setReloadKey((k) => k + 1);
+                }}
+              />
             </>
           )}
         </View>
@@ -245,13 +461,21 @@ function Shell() {
   );
 }
 
-function TabButton({ icon, label, on, badge = 0, onPress }: {
-  icon: IconName; label: string; on: boolean; badge?: number; onPress: () => void;
+function TabButton({
+  icon,
+  label,
+  on,
+  badge = 0,
+  onPress,
+}: {
+  icon: IconName;
+  label: string;
+  on: boolean;
+  badge?: number;
+  onPress: () => void;
 }) {
   return (
     <Pressable style={s.tab} onPress={onPress}>
-      {/* The active tab gets a bar above it as well as colour, so the state is
-          not carried by hue alone. */}
       <View style={[s.tabMark, on && s.tabMarkOn]} />
       <View>
         <Icon name={icon} size={20} color={on ? C.ink : C.muted} />
@@ -261,52 +485,105 @@ function TabButton({ icon, label, on, badge = 0, onPress }: {
           </View>
         )}
       </View>
-      <Text style={[s.tabText, on && s.tabOn]} numberOfLines={1}>{label}</Text>
+      <Text style={[s.tabText, on && s.tabOn]} numberOfLines={1}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
 
 const s = StyleSheet.create({
   safe: {
-    flex: 1, backgroundColor: C.bg,
+    flex: 1,
+    backgroundColor: C.bg,
     paddingTop: Platform.OS === "android" ? RNStatusBar.currentHeight : 0,
   },
   boot: { flex: 1, backgroundColor: C.dark, alignItems: "center", justifyContent: "center" },
   bootLogo: { color: "#fff", fontSize: 28, fontWeight: "800", letterSpacing: 6, marginBottom: S.lg },
   bar: {
-    backgroundColor: C.bg, paddingHorizontal: S.xl, paddingVertical: S.md,
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    backgroundColor: C.bg,
+    paddingHorizontal: S.lg,
+    paddingVertical: S.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   wordmark: { color: C.ink, fontWeight: "800", letterSpacing: 4, fontSize: 15 },
-  avatar: {
-    width: 38, height: 38, borderRadius: 19, backgroundColor: C.brand,
-    alignItems: "center", justifyContent: "center",
+  topActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
-  avatarText: { color: C.ink, fontWeight: "800", fontSize: 16 },
+  topIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: C.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: C.line,
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: C.brand,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 4,
+  },
+  avatarText: { color: C.ink, fontWeight: "800", fontSize: 15 },
   body: { flex: 1, backgroundColor: C.bg },
   tabs: {
-    flexDirection: "row", alignItems: "center", backgroundColor: C.surface,
-    borderTopWidth: 1, borderTopColor: C.line, paddingBottom: S.sm, paddingTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: C.surface,
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+    paddingBottom: S.sm,
+    paddingTop: 6,
   },
   fab: {
-    width: 58, height: 58, borderRadius: 29, backgroundColor: C.dark,
-    alignItems: "center", justifyContent: "center", marginTop: -26,
-    borderWidth: 4, borderColor: C.surface,
-    shadowColor: "#3a3226", shadowOpacity: 0.28, shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 }, elevation: 8,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: C.dark,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: -26,
+    borderWidth: 4,
+    borderColor: C.surface,
+    shadowColor: "#3a3226",
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
   },
   tab: { flex: 1, alignItems: "center", paddingBottom: 8 },
   tabMark: {
-    width: 24, height: 3, borderRadius: 2, backgroundColor: "transparent", marginBottom: 8,
+    width: 24,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: "transparent",
+    marginBottom: 8,
   },
   tabMarkOn: { backgroundColor: C.ink },
   tabText: { fontSize: 10, color: C.muted, marginTop: 3, fontWeight: "700" },
   tabOn: { color: C.ink },
   badge: {
-    position: "absolute", top: -5, right: -11, backgroundColor: C.coral,
-    minWidth: 18, height: 18, borderRadius: 9, alignItems: "center",
-    justifyContent: "center", paddingHorizontal: 4,
-    borderWidth: 2, borderColor: C.surface,
+    position: "absolute",
+    top: -5,
+    right: -11,
+    backgroundColor: C.coral,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: C.surface,
   },
   badgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
 });

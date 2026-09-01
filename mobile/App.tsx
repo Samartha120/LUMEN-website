@@ -25,37 +25,27 @@ import AssistantScreen from "./src/screens/staff/AssistantScreen";
 import MeasureScreen from "./src/screens/staff/MeasureScreen";
 
 // Interactive citizen and staff screens
-import { CommunityFeedScreen } from "./src/screens/CommunityFeedScreen";
-import { HeatmapScreen } from "./src/screens/HeatmapScreen";
 import { LiveTrackingScreen } from "./src/screens/LiveTrackingScreen";
 import { VoiceReportScreen } from "./src/screens/VoiceReportScreen";
 import { EmergencySOSScreen } from "./src/screens/EmergencySOSScreen";
-import { CivicLeaderboardScreen } from "./src/screens/CivicLeaderboardScreen";
 import { NotificationCenterScreen } from "./src/screens/NotificationCenterScreen";
 import { VerificationScreen } from "./src/screens/staff/VerificationScreen";
 
 // Newly built advanced modules
-import { VolunteerDrivesScreen } from "./src/screens/VolunteerDrivesScreen";
 import { SafeRouteScreen } from "./src/screens/SafeRouteScreen";
-import { AssetScannerScreen } from "./src/screens/AssetScannerScreen";
-import { WardBudgetScreen } from "./src/screens/WardBudgetScreen";
-import { FloodMonitorScreen } from "./src/screens/FloodMonitorScreen";
 import { FieldToolkitScreen } from "./src/screens/staff/FieldToolkitScreen";
 
 import { C, S } from "./src/theme";
 import { I18nProvider, useT } from "./src/i18n";
 import {
-  CivicFeedProvider,
   NotificationProvider,
   OfflineQueueProvider,
-  KarmaProvider,
   EmergencyAlertProvider,
 } from "./src/state";
 import { Icon, IconName } from "./src/Icon";
 
 export type Tab =
-  | "home" | "feed" | "map" | "report" | "alerts" | "profile" | "tracking" | "voice" | "sos" | "leaderboard" | "insights"
-  | "volunteers" | "routes" | "assets" | "budget" | "flood"
+  | "home" | "report" | "alerts" | "profile" | "tracking" | "voice" | "sos" | "insights" | "routes"
   | "queue" | "ops" | "assistant" | "measure" | "verify" | "toolkit";
 
 export type Sheet =
@@ -65,14 +55,7 @@ export type Sheet =
   | { kind: "tracking"; ref: string }
   | { kind: "voice" }
   | { kind: "sos" }
-  | { kind: "leaderboard" }
-  | { kind: "map" }
-  | { kind: "feed" }
-  | { kind: "volunteers" }
   | { kind: "routes" }
-  | { kind: "assets" }
-  | { kind: "budget" }
-  | { kind: "flood" }
   | { kind: "toolkit" }
   | { kind: "outbox" }
   | { kind: "help" }
@@ -83,13 +66,9 @@ export default function App() {
     <I18nProvider>
       <OfflineQueueProvider>
         <NotificationProvider>
-          <CivicFeedProvider>
-            <KarmaProvider>
-              <EmergencyAlertProvider>
-                <Shell />
-              </EmergencyAlertProvider>
-            </KarmaProvider>
-          </CivicFeedProvider>
+          <EmergencyAlertProvider>
+            <Shell />
+          </EmergencyAlertProvider>
         </NotificationProvider>
       </OfflineQueueProvider>
     </I18nProvider>
@@ -203,13 +182,6 @@ function Shell() {
         <View style={s.topActions}>
           {!staff ? (
             <>
-              <Pressable
-                style={s.topIconBtn}
-                onPress={() => setSheet({ kind: "volunteers" })}
-                hitSlop={6}
-              >
-                <Icon name="users" size={17} color="#10B981" />
-              </Pressable>
 
               <Pressable
                 style={s.topIconBtn}
@@ -219,21 +191,7 @@ function Shell() {
                 <Icon name="navigation" size={17} color={C.brand} />
               </Pressable>
 
-              <Pressable
-                style={s.topIconBtn}
-                onPress={() => setSheet({ kind: "assets" })}
-                hitSlop={6}
-              >
-                <Icon name="tag" size={17} color="#3B82F6" />
-              </Pressable>
 
-              <Pressable
-                style={s.topIconBtn}
-                onPress={() => setSheet({ kind: "budget" })}
-                hitSlop={6}
-              >
-                <Icon name="dollar-sign" size={17} color="#8B5CF6" />
-              </Pressable>
 
               <Pressable
                 style={s.topIconBtn}
@@ -306,24 +264,10 @@ function Shell() {
           />
         ) : sheet?.kind === "sos" ? (
           <EmergencySOSScreen />
-        ) : sheet?.kind === "leaderboard" ? (
-          <CivicLeaderboardScreen />
-        ) : sheet?.kind === "volunteers" ? (
-          <VolunteerDrivesScreen />
         ) : sheet?.kind === "routes" ? (
           <SafeRouteScreen />
-        ) : sheet?.kind === "assets" ? (
-          <AssetScannerScreen navigation={{ navigate: (screen: string) => { setSheet(null); setTab(screen as any); } }} />
-        ) : sheet?.kind === "budget" ? (
-          <WardBudgetScreen />
-        ) : sheet?.kind === "flood" ? (
-          <FloodMonitorScreen />
         ) : sheet?.kind === "toolkit" ? (
           <FieldToolkitScreen />
-        ) : sheet?.kind === "map" ? (
-          <HeatmapScreen />
-        ) : sheet?.kind === "feed" ? (
-          <CommunityFeedScreen />
         ) : sheet?.kind === "outbox" ? (
           <OutboxScreen onBack={() => setSheet(null)} onSent={() => setReloadKey((k) => k + 1)} />
         ) : sheet?.kind === "help" ? (
@@ -336,10 +280,6 @@ function Shell() {
           <AssistantScreen />
         ) : tab === "verify" ? (
           <VerificationScreen navigation={{ goBack: () => setTab("queue") }} />
-        ) : tab === "feed" ? (
-          <CommunityFeedScreen />
-        ) : tab === "map" ? (
-          <HeatmapScreen />
         ) : tab === "report" ? (
           <ReportScreen
             onFiled={() => {
@@ -417,15 +357,6 @@ function Shell() {
                   setReloadKey((k) => k + 1);
                 }}
               />
-              <TabButton
-                icon="users"
-                label="Community"
-                on={tab === "feed"}
-                onPress={() => {
-                  setTab("feed");
-                  setReloadKey((k) => k + 1);
-                }}
-              />
 
               <Pressable
                 style={({ pressed }) => [s.fab, pressed && { transform: [{ scale: 0.96 }] }]}
@@ -434,15 +365,6 @@ function Shell() {
                 <Icon name="camera" size={23} color={C.brand} />
               </Pressable>
 
-              <TabButton
-                icon="map-pin"
-                label="Heatmap"
-                on={tab === "map"}
-                onPress={() => {
-                  setTab("map");
-                  setReloadKey((k) => k + 1);
-                }}
-              />
               <TabButton
                 icon="bell"
                 label={t("tab.updates")}

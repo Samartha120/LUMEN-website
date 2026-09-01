@@ -5,7 +5,7 @@
 import { HazardBroadcast, GeofenceSubscription, EmergencyContact } from '../types/emergency.types';
 import { GeoCoordinate } from '../types/civic.types';
 import { StorageService } from './storage.service';
-import { HeatmapService } from './heatmap.service';
+import { calculateHaversineDistanceMeters } from '../utils/geo';
 
 const HAZARD_CACHE_KEY = 'hazard_broadcasts';
 const GEOFENCE_CACHE_KEY = 'geofence_subscriptions';
@@ -108,7 +108,7 @@ export class EmergencyService {
 
     if (userCoordinate) {
       return active.map(h => {
-        const dist = HeatmapService.calculateDistance(userCoordinate, h.centerCoordinate);
+        const dist = calculateHaversineDistanceMeters(userCoordinate, h.centerCoordinate);
         return { ...h, distanceMeters: dist };
       }).sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0));
     }

@@ -4,6 +4,7 @@ import {
   StyleSheet, Text, View, Platform,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { clearToken, loadToken, me, notifications } from "./src/api";
 import { flushOutbox } from "./src/outbox";
 import LoginScreen from "./src/screens/LoginScreen";
@@ -11,23 +12,33 @@ import ReportScreen from "./src/screens/ReportScreen";
 import MyReportsScreen from "./src/screens/MyReportsScreen";
 import AlertsScreen from "./src/screens/AlertsScreen";
 import DetailScreen from "./src/screens/DetailScreen";
-import { C, S, R } from "./src/theme";
+import InsightsScreen from "./src/screens/InsightsScreen";
+import ProfileScreen, { LOCK_KEY } from "./src/screens/ProfileScreen";
+import OutboxScreen from "./src/screens/OutboxScreen";
+import HelpScreen from "./src/screens/HelpScreen";
+import OnboardingScreen, { SEEN_KEY } from "./src/screens/OnboardingScreen";
+import LockScreen from "./src/screens/LockScreen";
+import { C, S } from "./src/theme";
 import { Icon, IconName } from "./src/Icon";
 
-type Tab = "report" | "reports" | "alerts";
+type Tab = "home" | "insights" | "report" | "alerts" | "profile";
+/** Pushed over the tabs, and dismissed back to wherever you were. */
+type Sheet = { kind: "detail"; ref: string } | { kind: "outbox" } | { kind: "help" } | null;
 
 /**
  * Navigation is a piece of state rather than a router.
  *
- * There are four places to be — file a report, see your reports, read updates,
- * open one report — and no deep links or back stack to preserve. A router
- * would be a dependency and a build step for what a union type expresses.
+ * Five tabs and three pushed screens, with no deep links and no back stack to
+ * preserve. A router would be a dependency and a build step for what two union
+ * types express, and every screen here is one tap away regardless.
  */
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [checking, setChecking] = useState(true);
-  const [tab, setTab] = useState<Tab>("reports");
-  const [openRef, setOpenRef] = useState<string | null>(null);
+  const [onboarded, setOnboarded] = useState(true);
+  const [locked, setLocked] = useState(false);
+  const [tab, setTab] = useState<Tab>("home");
+  const [sheet, setSheet] = useState<Sheet>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [unread, setUnread] = useState(0);
 
@@ -35,9 +46,15 @@ export default function App() {
   // so it is checked against /me rather than trusted on sight.
   useEffect(() => {
     (async () => {
+      setOnboarded((await AsyncStorage.getItem(SEEN_KEY)) === "1");
       const token = await loadToken();
       if (token) {
-        try { setUser(await me()); } catch { await clearToken(); }
+        try {
+          setUser(await me());
+          setLocked((await AsyncStorage.getItem(LOCK_KEY)) === "1");
+        } catch {
+          await clearToken();
+        }
       }
       setChecking(false);
     })();
@@ -46,74 +63,104 @@ export default function App() {
   // Anything written down while offline goes out as soon as the app opens with
   // a signal, without the user having to remember it is there.
   useEffect(() => {
-    if (!user) return;
+    if (!user || locked) return;
     (async () => {
       const { sent } = await flushOutbox();
       if (sent.length) setReloadKey((k) => k + 1);
       try { setUnread((await notifications()).unread ?? 0); } catch { /* offline */ }
     })();
-  }, [user, reloadKey]);
+  }, [user, locked, reloadKey]);
 
   async function signOut() {
     await clearToken();
     setUser(null);
-    setOpenRef(null);
-    setTab("reports");
+    setSheet(null);
+    setTab("home");
   }
 
   if (checking) {
     return (
       <View style={s.boot}>
         <Text style={s.bootLogo}>LUMEN</Text>
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={C.brand} />
       </View>
+    );
+  }
+
+  if (!onboarded) {
+    return (
+      <>
+        <StatusBar style="dark" />
+        <OnboardingScreen onDone={() => setOnboarded(true)} />
+      </>
     );
   }
 
   if (!user) {
     return (
       <>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <LoginScreen onSignedIn={setUser} />
       </>
     );
   }
+
+  if (locked) {
+    return (
+      <>
+        <StatusBar style="dark" />
+        <LockScreen onUnlock={() => setLocked(false)} />
+      </>
+    );
+  }
+
+  const openDetail = (ref: string) => setSheet({ kind: "detail", ref });
 
   return (
     <SafeAreaView style={s.safe}>
       <StatusBar style="dark" />
       <View style={s.bar}>
         <Text style={s.wordmark}>LUMEN</Text>
-        <View style={s.barRight}>
-          <Pressable onPress={signOut} hitSlop={10} style={s.signOutBtn}>
-            <Text style={s.signOut}>Sign out</Text>
-          </Pressable>
+        <Pressable onPress={() => { setSheet(null); setTab("profile"); }} hitSlop={8}>
           <View style={s.avatar}>
             <Text style={s.avatarText}>
               {String(user?.name ?? "?").trim().charAt(0).toUpperCase()}
             </Text>
           </View>
-        </View>
+        </Pressable>
       </View>
 
       <View style={s.body}>
-        {openRef ? (
-          <DetailScreen refCode={openRef} onBack={() => setOpenRef(null)} />
+        {sheet?.kind === "detail" ? (
+          <DetailScreen refCode={sheet.ref} onBack={() => setSheet(null)} />
+        ) : sheet?.kind === "outbox" ? (
+          <OutboxScreen onBack={() => setSheet(null)} onSent={() => setReloadKey((k) => k + 1)} />
+        ) : sheet?.kind === "help" ? (
+          <HelpScreen onBack={() => setSheet(null)} />
         ) : tab === "report" ? (
-          <ReportScreen
-            onFiled={() => { setReloadKey((k) => k + 1); setTab("reports"); }}
-          />
-        ) : tab === "reports" ? (
-          <MyReportsScreen onOpen={setOpenRef} reloadKey={reloadKey} name={user?.name} />
+          <ReportScreen onFiled={() => { setReloadKey((k) => k + 1); setTab("home"); }} />
+        ) : tab === "home" ? (
+          <MyReportsScreen onOpen={openDetail} reloadKey={reloadKey} name={user?.name} />
+        ) : tab === "insights" ? (
+          <InsightsScreen reloadKey={reloadKey} />
+        ) : tab === "alerts" ? (
+          <AlertsScreen onOpen={openDetail} onRead={() => setReloadKey((k) => k + 1)} />
         ) : (
-          <AlertsScreen onOpen={setOpenRef} onRead={() => setReloadKey((k) => k + 1)} />
+          <ProfileScreen
+            user={user}
+            onSignOut={signOut}
+            onOpenOutbox={() => setSheet({ kind: "outbox" })}
+            onOpenHelp={() => setSheet({ kind: "help" })}
+          />
         )}
       </View>
 
-      {!openRef && (
+      {!sheet && (
         <View style={s.tabs}>
-          <TabButton icon="home" label="Home" on={tab === "reports"}
-            onPress={() => { setTab("reports"); setReloadKey((k) => k + 1); }} />
+          <TabButton icon="home" label="Home" on={tab === "home"}
+            onPress={() => { setTab("home"); setReloadKey((k) => k + 1); }} />
+          <TabButton icon="bar-chart-2" label="Impact" on={tab === "insights"}
+            onPress={() => { setTab("insights"); setReloadKey((k) => k + 1); }} />
 
           {/* Reporting is the reason the app exists, so it is not a tab
               competing with the others — it is the button in the middle. */}
@@ -126,6 +173,8 @@ export default function App() {
 
           <TabButton icon="bell" label="Updates" on={tab === "alerts"} badge={unread}
             onPress={() => { setTab("alerts"); setReloadKey((k) => k + 1); }} />
+          <TabButton icon="user" label="Profile" on={tab === "profile"}
+            onPress={() => setTab("profile")} />
         </View>
       )}
     </SafeAreaView>
@@ -141,14 +190,14 @@ function TabButton({ icon, label, on, badge = 0, onPress }: {
           not carried by hue alone. */}
       <View style={[s.tabMark, on && s.tabMarkOn]} />
       <View>
-        <Icon name={icon} size={21} color={on ? C.ink : C.muted} />
+        <Icon name={icon} size={20} color={on ? C.ink : C.muted} />
         {badge > 0 && (
           <View style={s.badge}>
             <Text style={s.badgeText}>{badge > 9 ? "9+" : badge}</Text>
           </View>
         )}
       </View>
-      <Text style={[s.tabText, on && s.tabOn]}>{label}</Text>
+      <Text style={[s.tabText, on && s.tabOn]} numberOfLines={1}>{label}</Text>
     </Pressable>
   );
 }
@@ -165,17 +214,11 @@ const s = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
   },
   wordmark: { color: C.ink, fontWeight: "800", letterSpacing: 4, fontSize: 15 },
-  barRight: { flexDirection: "row", alignItems: "center", gap: S.md },
   avatar: {
     width: 38, height: 38, borderRadius: 19, backgroundColor: C.brand,
     alignItems: "center", justifyContent: "center",
   },
   avatarText: { color: C.ink, fontWeight: "800", fontSize: 16 },
-  signOutBtn: {
-    paddingHorizontal: S.md, paddingVertical: 6, borderRadius: R.pill,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.line,
-  },
-  signOut: { color: C.body, fontSize: 12, fontWeight: "700" },
   body: { flex: 1, backgroundColor: C.bg },
   tabs: {
     flexDirection: "row", alignItems: "center", backgroundColor: C.surface,
@@ -190,10 +233,10 @@ const s = StyleSheet.create({
   },
   tab: { flex: 1, alignItems: "center", paddingBottom: 8 },
   tabMark: {
-    width: 26, height: 3, borderRadius: 2, backgroundColor: "transparent", marginBottom: 8,
+    width: 24, height: 3, borderRadius: 2, backgroundColor: "transparent", marginBottom: 8,
   },
   tabMarkOn: { backgroundColor: C.ink },
-  tabText: { fontSize: 11, color: C.muted, marginTop: 3, fontWeight: "700" },
+  tabText: { fontSize: 10, color: C.muted, marginTop: 3, fontWeight: "700" },
   tabOn: { color: C.ink },
   badge: {
     position: "absolute", top: -5, right: -11, backgroundColor: C.coral,

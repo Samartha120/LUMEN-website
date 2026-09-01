@@ -246,6 +246,8 @@ export type Complaint = {
   priority: string | null;
   address: string | null;
   zone: string | null;
+  lat?: number | null;
+  lng?: number | null;
   createdAt: string;
   department?: { name: string } | null;
 };

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View,
+  ActivityIndicator, Image, Linking, Modal, Platform, Pressable,
+  ScrollView, StyleSheet, Text, View,
 } from "react-native";
 import { complaint, mediaUrl, ComplaintDetail, Detection } from "../api";
 import { C, S, R, F, card, tone, statusLabel, ago } from "../theme";
@@ -13,6 +14,7 @@ export default function DetailScreen({ refCode, onBack }: {
 }) {
   const [c, setC] = useState<ComplaintDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(false);
 
   useEffect(() => {
     complaint(refCode).then(setC).catch((e) => setError(e?.message ?? "Could not load."));
@@ -58,18 +60,45 @@ export default function DetailScreen({ refCode, onBack }: {
         {c.createdAt ? `  ·  ${ago(c.createdAt)}` : ""}
       </Text>
       {c.address && (
-        <View style={s.addressRow}>
+        <Pressable
+          style={s.addressRow}
+          disabled={c.lat == null || c.lng == null}
+          onPress={() => {
+            // Handed to whatever map app the phone already has, rather than
+            // embedding one: a map view needs an API key per platform, and a
+            // key that expires is a screen that breaks in front of an audience.
+            const q = `${c.lat},${c.lng}`;
+            const url = Platform.select({
+              ios: `maps://?q=${encodeURIComponent(c.title)}&ll=${q}`,
+              android: `geo:${q}?q=${q}(${encodeURIComponent(c.title)})`,
+              default: `https://www.google.com/maps/search/?api=1&query=${q}`,
+            })!;
+            Linking.openURL(url).catch(() =>
+              Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${q}`).catch(() => {}));
+          }}
+        >
           <Icon name="map-pin" size={13} color={C.muted} />
           <Text style={s.address}>{c.address}</Text>
-        </View>
+          {c.lat != null && <Text style={s.openMap}>Open in Maps</Text>}
+        </Pressable>
       )}
 
       {shown && (
-        <View style={s.imageWrap}>
+        <Pressable onPress={() => setZoom(true)} style={s.imageWrap}>
           <Image source={{ uri: shown }} style={s.image} resizeMode="cover" />
           <View style={s.imageTag}><Text style={s.imageTagText}>MODEL OUTPUT</Text></View>
-        </View>
+          <View style={s.expand}><Icon name="maximize-2" size={14} color="#fff" /></View>
+        </Pressable>
       )}
+
+      {/* Full screen, because the outline is the evidence and it is worth
+          being able to look at it properly. */}
+      <Modal visible={zoom} transparent animationType="fade" onRequestClose={() => setZoom(false)}>
+        <Pressable style={s.zoomWrap} onPress={() => setZoom(false)}>
+          {shown && <Image source={{ uri: shown }} style={s.zoomImage} resizeMode="contain" />}
+          <View style={s.zoomClose}><Icon name="x" size={20} color="#fff" /></View>
+        </Pressable>
+      </Modal>
 
       <SectionTitle>What the model found</SectionTitle>
       {detections.length === 0 ? (
@@ -144,6 +173,17 @@ const s = StyleSheet.create({
   meta: { ...F.caption, marginTop: 6 },
   addressRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: S.xs },
   address: { ...F.caption },
+  openMap: { ...F.caption, fontSize: 12, fontWeight: "800", color: C.ink },
+  expand: {
+    position: "absolute", top: S.md, right: S.md,
+    backgroundColor: "rgba(10,10,10,0.6)", borderRadius: R.sm, padding: 6,
+  },
+  zoomWrap: {
+    flex: 1, backgroundColor: "rgba(10,10,10,0.94)",
+    alignItems: "center", justifyContent: "center",
+  },
+  zoomImage: { width: "100%", height: "80%" },
+  zoomClose: { position: "absolute", top: 54, right: S.xl },
 
   imageWrap: { marginTop: S.lg, borderRadius: R.lg, overflow: "hidden", backgroundColor: C.raised },
   image: { width: "100%", height: 250 },

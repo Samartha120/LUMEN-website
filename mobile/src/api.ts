@@ -176,10 +176,13 @@ export type Preview = {
   modelMode: string;
 };
 
+// Mirrors the Prisma model: a notification carries a `type` and a `message`,
+// not a title and a body. Reading fields that were not there is what left the
+// Updates list rendering empty cards.
 export type Notification = {
   id: string;
-  title: string;
-  body: string | null;
+  type: string;
+  message: string;
   readAt: string | null;
   createdAt: string;
   complaint?: { ref: string; title: string; status: string } | null;
